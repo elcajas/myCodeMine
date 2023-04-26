@@ -1,1 +1,6 @@
 *.log
+weights/
+__pycache__/
+logs/
+results/
+wandb/

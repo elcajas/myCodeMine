@@ -1,0 +1,58 @@
+feature_net_kwargs:
+  rgb_feat:
+    cls: DummyImgFeat
+    output_dim: 512
+  compass:
+    cls: CompassMLP
+    input_dim: 4
+    hidden_dim: 128
+    output_dim: 128
+    hidden_depth: 2
+  gps:
+    cls: GPSMLP
+    hidden_dim: 128
+    output_dim: 128
+    hidden_depth: 2
+  voxels:
+    cls: FlattenedVoxelBlockEncoder
+    embed_dim: 8
+    hidden_dim: 128
+    output_dim: 128
+    hidden_depth: 2
+  biome_id:
+    cls: BiomeIDEmb
+    embed_dim: 8
+  prev_action:
+    cls: PrevActionEmb
+    embed_dim: 8
+  prompt:
+    cls: PromptEmbFeat
+    output_dim: 512
+
+feature_fusion:
+  output_dim: 512
+  hidden_depth: 0
+
+actor:
+  hidden_dim: 256
+  hidden_depth: 3
+
+mineclip:
+
+  arch: "vit_base_p16_fz.v2.t2"
+  hidden_dim: 512
+  image_feature_dim: 512
+  mlp_adapter_spec: "v0-2.t0"
+  pool_type: "attn.d2.nh8.glusw"  # filled by variant
+  resolution: [160, 256]
+
+  ckpt:
+    path: /home/user/PPO/weights/attn.pth  # filled by users
+    checksum: "b5ece9198337cfd117a3bfbd921e56da"
+
+hydra:
+  job:
+    chdir: true
+  run:
+    dir: .
+  output_subdir: null
