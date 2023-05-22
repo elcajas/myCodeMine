@@ -1,5 +1,6 @@
 import hydra
 import hashlib
+import yaml
 from omegaconf import OmegaConf
 
 import numpy as np
@@ -20,7 +21,8 @@ from mineclip import MineCLIP
 from mineclip.mineagent.batch import Batch
 from mineclip import CombatSpiderDenseRewardEnv
 from mineclip import HuntCowDenseRewardEnv
-from models import PPO
+from RewardEnv.milk_cow import MilkCowDenseRewardEnv
+from models import PPO, SImodel
 
 import pdb
 
@@ -30,24 +32,28 @@ res_path = dir_path.joinpath("results")
 time = datetime.datetime.now().strftime("%y%m%d_%H%M")
 if not res_path.exists():
     res_path.mkdir()
-log_path = res_path.joinpath(f"results_{time}.log")
+res_path = res_path.joinpath(f"run_{time}")
+if not res_path.exists():
+    res_path.mkdir()
+log_path = res_path.joinpath(f"output.log")
 
 logging.basicConfig(filename=log_path,
                     format="[%(asctime)s] [%(levelname)8s] --- %(message)s (%(filename)s:%(lineno)s)", datefmt="%Y-%m-%d %H:%M:%S",
+                    level=logging.INFO,
                     filemode= 'w')
 
-wandb.init(
-    # set the wandb project where this run will be logged
-    project="MineDojo-PPO",
+# wandb.init(
+#     # set the wandb project where this run will be logged
+#     project="MineDojo-PPO-SI",
     
-    # track hyperparameters and run metadata
-    config={
-    "learning_rate": 1e-4,
-    "architecture": "PPO",
-    "environment": "HuntCowDenseReward",
-    "epochs": 20,
-    }
-)
+#     # track hyperparameters and run metadata
+#     config={
+#     "learning_rate": 1e-4,
+#     "architecture": "PPO_SI",
+#     "environment": "HuntCowDenseReward",
+#     "epochs": 20,
+#     }
+# )
 
 # os.environ['IMAGEIO_FFMPEG_EXE'] = '/opt/homebrew/bin/ffmpeg'
 ## DUMMY ENV
@@ -65,7 +71,8 @@ class MineEnv:
 
     def step(self, action):
         self._elapsed_steps += 1
-        return self.obs, 1, False, 1
+        reward = 1 + np.random.normal(0, 0.01)
+        return self.obs, reward, False, 1
 
     def close(self):
         return
@@ -89,7 +96,7 @@ def preprocess_obs(env_obs, device, prev_action, prompt, model):
     rgb_img = torch.tensor(env_obs['rgb'].copy()).float().to(device)
     with torch.no_grad():
         rgb_feat = model.clip_model.encode_image(rgb_img.unsqueeze(dim=0))
-
+    # rgb_feat = torch.rand((1,512), device=device)
     obs = {
         "rgb_feat": rgb_feat,
         "compass": torch.tensor(np.append(
@@ -131,8 +138,12 @@ def complete_action(action):
 
     return action, action_array[action.item()]
 
-@hydra.main(config_name="config", config_path=".", version_base="1.1")
-def main(cfg):
+# @hydra.main(config_name="config", config_path=".", version_base="1.1")
+def main():
+
+    with open("config.yaml", "r") as f:
+        cfg = yaml.safe_load(f)
+    cfg = OmegaConf.create(cfg)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
@@ -141,31 +152,40 @@ def main(cfg):
     OmegaConf.set_struct(cfg, True)
 
     ppo_agent = PPO(cfg, device)
+    si_model = SImodel(cfg, device)
     mineCLIP = set_MineCLIP(cfg_mineclip, device)
 
     prompt = "Hunt a cow"
     with torch.no_grad():
         prompt = mineCLIP.clip_model.encode_text(prompt)
     # env = MineEnv()
-    env = HuntCowDenseRewardEnv(
+    # env = HuntCowDenseRewardEnv(
+    #     step_penalty=0,
+    #     attack_reward=1,
+    #     nav_reward_scale=5,
+    #     success_reward=200,
+    # )
+    env = MilkCowDenseRewardEnv(
         step_penalty=0,
-        attack_reward=1,
-        nav_reward_scale=5,
+        attack_reward=0,
+        nav_reward_scale=10,
         success_reward=200,
     )
 
     state = env.reset()
     state, frame = preprocess_obs(state, device, no_action, prompt, mineCLIP)
     
-    ep_reward, total_timesteps, num_ep = 0, 0, 0
+    ep_reward, total_timesteps, num_ep, num_attack, num_use = 0, 0, 0, 0, 0
     steps_per_epoch = 100000
     epochs = 20
 
     for epoch in range(epochs):              
         for t in range(steps_per_epoch):                 # episode length
-            num_attack = 0
             action, log_prob, state_value = ppo_agent.process(state)
-            if action.item() == 7: num_attack += 1
+            if action.item() == 7:
+                num_attack += 1
+            if action.item() == 6:
+                num_use += 1
             action, env_action = complete_action(action)
 
             next_state, reward, done, _ = env.step(env_action)
@@ -194,20 +214,33 @@ def main(cfg):
                 else:
                     last_value = 0
 
-                if ep_reward > 200:
-                    ppo_agent.buffer.make_video(dir_path, ep_reward)
-                    print('making video')
-                ppo_agent.buffer.calc_advantages(last_val=last_value)
+                if ep_reward > 100:
+                    ppo_agent.buffer.make_video(res_path, ep_reward)
+                    logging.info('making video')
+
+                trajectory = ppo_agent.buffer.calc_advantages(last_val=last_value)
+                si_model.buffer.store(trajectory)
                 num_ep += 1
-                logging.info(f'step: {t+1} epoch: {epoch+1} episode: {num_ep}  episode reward: {ep_reward} attacked:{num_attack} times')
-                wandb.log({"episode_reward": ep_reward, "attack_action": num_attack, "episode": num_ep})
+                logging.info(f'step: {t+1}, epoch: {epoch+1}, episode: {num_ep}, ep_rew: {ep_reward:.2f}, atk: {num_attack}, use: {num_use} ')
+                # wandb.log({
+                #     "episode_reward": ep_reward,
+                #     "attack": num_attack,
+                #     "use": num_use,
+                #     "episode": num_ep,
+                # })
                 state = env.reset()
                 state, frame = preprocess_obs(state, device, no_action, prompt, mineCLIP)
-                ep_reward, ep_len = 0, 0
+                ep_reward, ep_len, num_attack, num_use = 0, 0, 0, 0
 
-        #Update PPO after buffer is full
+        # Update PPO after buffer is full
         ppo_agent.update()
         ppo_agent.save_model(res_path, time, epoch)
+
+        # Self Imitation learning training
+        weights = ppo_agent.policy.actor.state_dict()
+        si_model.train(weights=weights)
+        ppo_agent.policy.actor.load_state_dict(si_model.model.state_dict())
+
     env.close()
 
 if __name__ == "__main__":

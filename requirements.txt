@@ -1,4 +1,5 @@
 git+https://github.com/MineDojo/MineCLIP
+wandb
 imageio
 imageio-ffmpeg
 matplotlib

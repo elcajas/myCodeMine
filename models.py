@@ -1,8 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from collections import namedtuple, deque
+import random
 import imageio
 import pathlib
+import logging
 import wandb
 
 import torch
@@ -102,6 +104,56 @@ def custom_collate_fn(batch):
 
     return state_batch, action_batch, advantage_batch, old_logp_batch, return_batch
 
+class SIBuffer:
+    def __init__(self, capacity) -> None:
+        self.trajectories = [Batch(tmp=np.array([0]))] * capacity
+        self.rewards = np.zeros(capacity, dtype=np.float32)
+        self.probs = np.zeros(capacity, dtype=np.float32)
+
+        self.mean, self.std = 0, 0
+        self.traj_number, self.step_pos, self.max_capacity = 0, 0, capacity
+
+    def store(self, trajectory):
+
+        if self.traj_number < self.max_capacity:
+            if trajectory.successful == 1:
+                self.trajectories[self.traj_number] = trajectory
+                self.rewards[self.traj_number] = trajectory.total_reward
+                self.traj_number += 1
+                self.step_pos += len(trajectory.actions)
+                # Update mean and std
+                self.mean = self.rewards[:self.traj_number].mean()
+                self.std = np.std(self.rewards[:self.traj_number])
+
+            elif trajectory.total_reward > 0 and trajectory.total_reward >= (self.mean + 2 * self.std):
+                self.trajectories[self.traj_number] = trajectory
+                self.rewards[self.traj_number] = trajectory.total_reward
+                self.traj_number += 1
+                self.step_pos += len(trajectory.actions)
+                # Update mean and std
+                self.mean = self.rewards[:self.traj_number].mean()
+                self.std = np.std(self.rewards[:self.traj_number])
+
+        else:
+            pos = np.argmin(self.rewards)
+            if trajectory.successful == 1:
+                self.trajectories[pos] = trajectory
+                self.rewards[pos] = trajectory.total_reward
+                # Update mean and std
+                self.mean = self.rewards.mean()
+                self.std = np.std(self.rewards)
+
+            elif trajectory.total_reward > 0 and trajectory.total_reward >= (self.mean + 2 * self.std):
+                self.trajectories[pos] = trajectory
+                self.rewards[pos] = trajectory.total_reward
+                # Update mean and std
+                self.mean = self.rewards.mean()
+                self.std = np.std(self.rewards)
+        logging.info(f"mean: {self.mean}, std: {self.std}, threshold: {self.mean + 2 * self.std}")
+    def sample(self):
+        return self.trajectories[:self.traj_number]
+    
+
 class PPOBuffer:
     def __init__(self, capacity, gamma, lam) -> None:
         self.states = [Batch(tmp=np.array([0]))] * capacity
@@ -120,7 +172,7 @@ class PPOBuffer:
         self.pointer, self.path_start_idx, self.max_capacity = 0, 0, capacity 
     
     def store(self, state, action, reward, log_prob, state_value, is_terminal, next_state, frame):
-        
+
         assert self.pointer < self.max_capacity
 
         self.states[self.pointer] = state
@@ -137,6 +189,14 @@ class PPOBuffer:
         path_slice = slice(self.path_start_idx, self.pointer)
         rewards = np.append(self.rewards[path_slice], last_val)
         values = np.append(self.state_values[path_slice], last_val)
+        trajectory = Batch.cat(self.states[path_slice])
+        trajectory['actions'] = torch.tensor(self.actions[path_slice])
+        trajectory['total_reward'] = torch.tensor([self.rewards[path_slice].sum()])
+
+        if len(trajectory.actions) < 500:
+            trajectory['successful'] = torch.tensor([1])
+        else:
+            trajectory['successful'] = torch.tensor([0])
 
         #GAE
         deltas = rewards[:-1] + self.gamma * values[1:] - values[:-1]
@@ -146,6 +206,7 @@ class PPOBuffer:
         self.returns[path_slice] = discounted_cumsum(rewards, self.gamma)[:-1]
 
         self.path_start_idx = self.pointer
+        return trajectory
 
     def get(self, device):
         
@@ -168,10 +229,20 @@ class PPOBuffer:
         data_dict.update(tmp_dict)
         return PPODataset(data_dict, device)
     
-    def make_video(self, path, reward):
-        frames = self.frames[self.path_start_idx:self.pointer]
-        video_path = path.joinpath(f"video_{reward}.mp4")
-        writer = imageio.get_writer(video_path, fps=30)
+    def make_video(self, path: pathlib.Path, reward):
+        traj_slice = slice(self.path_start_idx, self.pointer)
+        frames = self.frames[traj_slice]
+        
+        logging.info(f"actions: {self.actions[traj_slice]}")
+        logging.info(f"rewards: {self.rewards[traj_slice]}")
+        logging.info(f"returns: {self.returns[traj_slice]}")
+
+        video_dir = path.joinpath("videos")
+        if not video_dir.exists():
+            video_dir.mkdir()
+        
+        video_path = video_dir.joinpath(f"video_{reward:.2f}.mp4")
+        writer = imageio.get_writer(video_path, fps=10)
         for frame in frames:
             writer.append_data(frame)
         writer.close()
@@ -202,13 +273,12 @@ class Critic(nn.Module):
         hidden = None
         return self.net(x), hidden
 
-class ActorCritic(nn.Module):
+class Actor(nn.Module):
     def __init__(self, cfg, device) -> None:
         self.cfg = cfg
         self.device = device
         super().__init__()
 
-        #actor
         feature_net_kwargs = cfg.feature_net_kwargs
         feature_net = {}
 
@@ -235,31 +305,42 @@ class ActorCritic(nn.Module):
             actor=self.actor,
         )
 
+
+class ActorCritic(nn.Module):
+    def __init__(self, cfg, device) -> None:
+        self.cfg = cfg
+        self.device = device
+        super().__init__()
+
+        self.actor = Actor(
+            cfg=self.cfg,
+            device=self.device
+        )
+
         self.critic = Critic(
-            feature_net,
+            self.actor.actor.preprocess,
             output_dim=1,
             device=self.device,
             **cfg.actor
         )
     
     def act(self, state):
-        logit_batch = self.agent(state)
+        logit_batch = self.actor.agent(state)
         action = logit_batch.act
         action_logprob = logit_batch.dist.log_prob(action)
         
-        state_feat, _ = self.actor.preprocess(state.obs)
+        state_feat, _ = self.actor.actor.preprocess(state.obs)
         state_val, _ = self.critic(state_feat)
 
         return action, action_logprob, state_val
     
     def eval(self, state, action):
-
-        logit_batch = self.agent(state)
+        logit_batch = self.actor.agent(state)
         action_logprobs = logit_batch.dist.log_prob(action)
         action_probs = logit_batch.dist._dists[0].probs
         dist_entropy = logit_batch.dist.entropy()
         
-        state_feat, _ = self.actor.preprocess(state.obs)
+        state_feat, _ = self.actor.actor.preprocess(state.obs)
         state_values, _ = self.critic(state_feat)
 
         return action_logprobs, state_values, dist_entropy, action_probs
@@ -276,6 +357,7 @@ class PPO:
         self.lr_critic = 1e-4
         self.cfg = cfg
         self.device = device
+        self.counter = 0
 
         self.buffer = PPOBuffer(self.memory_capacity, self.gamma, self.lam)
         self.policy = ActorCritic(cfg, device).to(device=self.device)
@@ -331,6 +413,7 @@ class PPO:
 
 
     def update(self):
+
         dataset = self.buffer.get(self.device)
         dataloader = DataLoader(dataset, batch_size=4096, collate_fn=custom_collate_fn)
         # state_batch = data['states']
@@ -340,7 +423,7 @@ class PPO:
         # return_batch = data['returns']
 
         for _ in range(self.optim_iter):
-            print(f"Update {_}")
+            logging.info(f"PPO update {_+1}")
             for i, batch in enumerate(dataloader):
                 state_batch, action_batch, advantage_batch, old_logp_batch, return_batch = batch
 
@@ -356,8 +439,16 @@ class PPO:
                 critic_loss = nn.MSELoss()(value_batch.squeeze(), return_batch)
                 smoothing_loss = self.smoothing(probs_batch, 3)
                 loss = actor_loss + 0.5 * critic_loss - 0.005 * entropy_batch + 1e-7 * smoothing_loss
-                print("loss:", loss.mean())
-                wandb.log({"actor_loss": actor_loss.mean(), "critic_loss": critic_loss, "entropy_loss": entropy_batch, "smoothing_loss": smoothing_loss, "loss": loss.mean()})
+                logging.info(f"iter: {i+1}, loss: {loss.mean()}")
+                self.counter += 1
+                # wandb.log({
+                #     "actor_loss": actor_loss.mean(), 
+                #     "critic_loss": critic_loss, 
+                #     "entropy_loss": entropy_batch, 
+                #     "smoothing_loss": smoothing_loss, 
+                #     "loss": loss.mean(),
+                #     "update": self.counter,
+                # })
                 
                 self.optimizer.zero_grad()
                 loss.mean().backward()
@@ -393,3 +484,43 @@ class PPO:
             # self.critic_optim.zero_grad()
             # critic_loss.backward()
             # self.critic_optim.step()
+
+class SImodel:
+    def __init__(self, cfg, device) -> None:
+        self.epochs = 10
+        self.lr = 1e-4
+        self.buffer_capacity = 250
+        self.cfg = cfg
+        self.device = device
+        self.counter = 0
+
+        self.buffer = SIBuffer(self.buffer_capacity)
+        self.model = Actor(self.cfg, self.device).to(device=self.device)
+        self.optimizer = Adam(self.model.parameters(), lr=self.lr)
+        self.scheduler = CosineAnnealingLR(self.optimizer,
+                                           T_max= 10,
+                                           eta_min = 1e-6)
+
+    def eval(self, state, action):
+        logit_batch = self.model.agent(state)
+        action_logprobs = logit_batch.dist.log_prob(action)
+        return action_logprobs
+
+    def train(self, weights):
+        trajectories = self.buffer.sample()
+        data_batch = Batch.cat(trajectories)
+        state_batch = Batch(obs=data_batch.obs)
+        action_batch = data_batch.actions.to(self.device)
+        # state_batch = data_batch.obs
+        self.model.load_state_dict(weights)
+
+        for epoch in range(self.epochs):
+            loss = - self.eval(state_batch, action_batch.unsqueeze(dim=0)).mean() #maximize E(logp(a|s))
+            self.optimizer.zero_grad()
+            loss.backward()
+            clip_grad_norm_(self.model.parameters(), max_norm=10)
+            self.optimizer.step()
+            self.counter += 1
+            logging.info(f"SI update {epoch+1}, loss: {loss}")
+            # wandb.log({'SI_loss': loss, 'epoch': self.counter,})
+        self.scheduler.step()
