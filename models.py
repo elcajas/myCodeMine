@@ -1,8 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from collections import namedtuple, deque
-import random
-import imageio
+
 import pathlib
 import logging
 import wandb
@@ -12,240 +10,16 @@ import torch.nn as nn
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 
 from mineclip.mineagent import features as F
 from mineclip import SimpleFeatureFusion, MineAgent, MultiCategoricalActor
 from mineclip.mineagent.batch import Batch
-
 from mineclip.utils import build_mlp
+
+from Data.buffers import PPOBuffer, SIBuffer
+from Data.datasets import custom_collate_fn
 import pdb
-
-def discounted_cumsum(data, discount, tmp=0):
-    sum = []
-    for d in reversed(data):
-        tmp = d + discount * tmp
-        sum.append(tmp)
-    return sum[::-1]
-        
-Transition = namedtuple('Transition', 
-                        ('states', 'actions', 'rewards', 'log_probs', 'state_values', 'is_terminals', 'next_states'))
-Complete_transition = namedtuple('Complete_transition', 
-                        ('states', 'actions', 'rewards', 'log_probs', 'state_values', 'is_terminals', 'next_states', 'returns', 'advantages'))
-
-class MemoryReplay:
-    def __init__(self, capacity, gamma, lam) -> None:
-        self.memory = deque([], maxlen=capacity)
-        self.returns = deque([], maxlen=capacity)
-        self.advantages = deque([],maxlen=capacity)
-
-        self.gamma, self.lam = gamma, lam
-        self.pointer, self.path_start_idx = 0, 0
-        self.capacity = capacity
-
-    def add(self, *args):
-        self.memory.append(Transition(*args))
-        self.pointer += 1
-    
-    def calc_advantages(self, last_val=0):
-        path_slice = slice(self.path_start_idx, self.pointer)
-        batch = Transition(*zip(*self.memory))
-        rewards = np.array((*batch.rewards[path_slice], last_val))
-        values = np.array((*batch.state_values[path_slice], last_val))
-
-    def __len__(self):
-        return len(self.memory)
-
-class RolloutBuffer:
-    def __init__(self) -> None:
-        self.actions = []
-        self.states = []
-        self.logprobs = []
-        self.rewards = []
-        self.state_values = []
-        self.is_terminals = []
-    
-    def clear(self):
-        del self.actions[:]
-        del self.states[:]
-        del self.logprobs[:]
-        del self.rewards[:]
-        del self.state_values[:]
-        del self.is_terminals[:]
-
-class PPODataset(Dataset):
-    def __init__(self, data: dict, device: torch.device) -> None:
-        self.state_data = data['states']
-        self.action_data = data['actions'].to(device)
-        self.advantage_data = data['advantages'].to(device)
-        self.old_logp_data = data['log_probs'].to(device)
-        self.return_data = data['returns'].to(device)
-    
-    def __len__(self):
-        return len(self.action_data)
-    
-    def __getitem__(self, index):
-        
-        state = self.state_data[index]
-        action = self.action_data[index]
-        advantage = self.advantage_data[index]
-        old_logp = self.old_logp_data[index]
-        retur = self.return_data[index]
-
-        return state, action, advantage, old_logp, retur
-
-def custom_collate_fn(batch):
-    arranged_batch = list(zip(*batch))
-    state_batch = Batch.stack(arranged_batch[0])
-    action_batch = torch.stack(arranged_batch[1])
-    advantage_batch = torch.stack(arranged_batch[2])
-    old_logp_batch = torch.stack(arranged_batch[3])
-    return_batch = torch.stack(arranged_batch[4])
-
-    return state_batch, action_batch, advantage_batch, old_logp_batch, return_batch
-
-class SIBuffer:
-    def __init__(self, capacity) -> None:
-        self.trajectories = [Batch(tmp=np.array([0]))] * capacity
-        self.rewards = np.zeros(capacity, dtype=np.float32)
-        self.probs = np.zeros(capacity, dtype=np.float32)
-
-        self.mean, self.std = 0, 0
-        self.traj_number, self.step_pos, self.max_capacity = 0, 0, capacity
-
-    def store(self, trajectory):
-
-        if self.traj_number < self.max_capacity:
-            if trajectory.successful == 1:
-                self.trajectories[self.traj_number] = trajectory
-                self.rewards[self.traj_number] = trajectory.total_reward
-                self.traj_number += 1
-                self.step_pos += len(trajectory.actions)
-                # Update mean and std
-                self.mean = self.rewards[:self.traj_number].mean()
-                self.std = np.std(self.rewards[:self.traj_number])
-
-            elif trajectory.total_reward > 0 and trajectory.total_reward >= (self.mean + 2 * self.std):
-                self.trajectories[self.traj_number] = trajectory
-                self.rewards[self.traj_number] = trajectory.total_reward
-                self.traj_number += 1
-                self.step_pos += len(trajectory.actions)
-                # Update mean and std
-                self.mean = self.rewards[:self.traj_number].mean()
-                self.std = np.std(self.rewards[:self.traj_number])
-
-        else:
-            pos = np.argmin(self.rewards)
-            if trajectory.successful == 1:
-                self.trajectories[pos] = trajectory
-                self.rewards[pos] = trajectory.total_reward
-                # Update mean and std
-                self.mean = self.rewards.mean()
-                self.std = np.std(self.rewards)
-
-            elif trajectory.total_reward > 0 and trajectory.total_reward >= (self.mean + 2 * self.std):
-                self.trajectories[pos] = trajectory
-                self.rewards[pos] = trajectory.total_reward
-                # Update mean and std
-                self.mean = self.rewards.mean()
-                self.std = np.std(self.rewards)
-        logging.info(f"mean: {self.mean}, std: {self.std}, threshold: {self.mean + 2 * self.std}")
-    def sample(self):
-        return self.trajectories[:self.traj_number]
-    
-
-class PPOBuffer:
-    def __init__(self, capacity, gamma, lam) -> None:
-        self.states = [Batch(tmp=np.array([0]))] * capacity
-        self.actions = np.zeros(capacity, dtype=np.float32)
-        self.rewards = np.zeros(capacity, dtype=np.float32)
-        self.log_probs = np.zeros(capacity, dtype=np.float32)
-        self.state_values = np.zeros(capacity, dtype=np.float32)
-        self.is_terminals = np.zeros(capacity, dtype=np.float32)
-        self.next_states = [Batch(tmp=np.array([0]))] * capacity
-        self.frames = [np.zeros((160, 256, 3), dtype=np.uint8)] * capacity
-
-        self.advantages = np.zeros(capacity, dtype=np.float32)
-        self.returns = np.zeros(capacity, dtype=np.float32)
-
-        self.gamma, self.lam = gamma, lam
-        self.pointer, self.path_start_idx, self.max_capacity = 0, 0, capacity 
-    
-    def store(self, state, action, reward, log_prob, state_value, is_terminal, next_state, frame):
-
-        assert self.pointer < self.max_capacity
-
-        self.states[self.pointer] = state
-        self.actions[self.pointer] = action
-        self.rewards[self.pointer] = reward
-        self.log_probs[self.pointer] = log_prob
-        self.state_values[self.pointer] = state_value
-        self.is_terminals[self.pointer] = is_terminal
-        self.next_states[self.pointer] = next_state
-        self.frames[self.pointer] = frame
-        self.pointer += 1
-
-    def calc_advantages(self, last_val=0):
-        path_slice = slice(self.path_start_idx, self.pointer)
-        rewards = np.append(self.rewards[path_slice], last_val)
-        values = np.append(self.state_values[path_slice], last_val)
-        trajectory = Batch.cat(self.states[path_slice])
-        trajectory['actions'] = torch.tensor(self.actions[path_slice])
-        trajectory['total_reward'] = torch.tensor([self.rewards[path_slice].sum()])
-
-        if len(trajectory.actions) < 500:
-            trajectory['successful'] = torch.tensor([1])
-        else:
-            trajectory['successful'] = torch.tensor([0])
-
-        #GAE
-        deltas = rewards[:-1] + self.gamma * values[1:] - values[:-1]
-        self.advantages[path_slice] = discounted_cumsum(deltas, self.gamma*self.lam)
-
-        # Rewards-to-go
-        self.returns[path_slice] = discounted_cumsum(rewards, self.gamma)[:-1]
-
-        self.path_start_idx = self.pointer
-        return trajectory
-
-    def get(self, device):
-        
-        assert self.pointer == self.max_capacity
-
-        self.pointer, self.path_start_idx = 0, 0
-
-        adv_mean, adv_std = np.mean(self.advantages), np.std(self.advantages)
-        self.advantages = (self.advantages - adv_mean) / adv_std
-        data = dict(actions = self.actions,
-                    rewards = self.rewards,
-                    log_probs = self.log_probs,
-                    state_values = self.state_values,
-                    is_terminals = self.is_terminals,
-                    advantages = self.advantages,
-                    returns = self.returns)
-        
-        data_dict = dict(states = Batch.cat(self.states), next_states = Batch.stack(self.next_states))
-        tmp_dict = {k: torch.as_tensor(v, dtype=torch.float32) for k, v in data.items()}
-        data_dict.update(tmp_dict)
-        return PPODataset(data_dict, device)
-    
-    def make_video(self, path: pathlib.Path, reward):
-        traj_slice = slice(self.path_start_idx, self.pointer)
-        frames = self.frames[traj_slice]
-        
-        logging.info(f"actions: {self.actions[traj_slice]}")
-        logging.info(f"rewards: {self.rewards[traj_slice]}")
-        logging.info(f"returns: {self.returns[traj_slice]}")
-
-        video_dir = path.joinpath("videos")
-        if not video_dir.exists():
-            video_dir.mkdir()
-        
-        video_path = video_dir.joinpath(f"video_{reward:.2f}.mp4")
-        writer = imageio.get_writer(video_path, fps=10)
-        for frame in frames:
-            writer.append_data(frame)
-        writer.close()
     
 class Critic(nn.Module):
     def __init__(
@@ -403,12 +177,12 @@ class PPO:
             tmp += self.KLD(probs[i:], probs[(i-j):(-j)])
         return tmp.mean()
     
-    def save_model(self, res_path: pathlib.Path, time, epoch):
+    def save_model(self, res_path: pathlib.Path, epoch):
         weights_dir_path = res_path.joinpath("weights")
         if not weights_dir_path.exists():
             weights_dir_path.mkdir()
         
-        weight_path = weights_dir_path.joinpath(f"model_{time}_{epoch}")
+        weight_path = weights_dir_path.joinpath(f"model_epoch_{epoch+1}")
         torch.save(self.policy.state_dict(), weight_path)
 
 
@@ -489,7 +263,7 @@ class SImodel:
     def __init__(self, cfg, device) -> None:
         self.epochs = 10
         self.lr = 1e-4
-        self.buffer_capacity = 250
+        self.buffer_capacity = 100
         self.cfg = cfg
         self.device = device
         self.counter = 0

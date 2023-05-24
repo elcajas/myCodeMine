@@ -141,7 +141,7 @@ def complete_action(action):
 # @hydra.main(config_name="config", config_path=".", version_base="1.1")
 def main():
 
-    with open("config.yaml", "r") as f:
+    with open(dir_path.joinpath("config.yaml"), "r") as f:
         cfg = yaml.safe_load(f)
     cfg = OmegaConf.create(cfg)
 
@@ -194,7 +194,7 @@ def main():
             total_timesteps += 1
             ep_reward += reward
 
-            ppo_agent.buffer.store(state, action, reward, log_prob, state_value, done, next_state, frame)
+            ppo_agent.buffer.store(state, action, reward, log_prob, state_value, frame)
             # ppo_agent.buffer.rewards.append(reward)
             # ppo_agent.buffer.is_terminals.append(done)
 
@@ -234,7 +234,7 @@ def main():
 
         # Update PPO after buffer is full
         ppo_agent.update()
-        ppo_agent.save_model(res_path, time, epoch)
+        ppo_agent.save_model(res_path, epoch)
 
         # Self Imitation learning training
         weights = ppo_agent.policy.actor.state_dict()

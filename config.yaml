@@ -47,7 +47,7 @@ mineclip:
   resolution: [160, 256]
 
   ckpt:
-    path:  /home/kenjic/documents/MineDojo_PPO/PPO_SI/weights/attn.pth # filled by users
+    path:  /home/kenjic/documents/MineDojo_PPO/weights/attn.pth # filled by users
     checksum: "b5ece9198337cfd117a3bfbd921e56da"
 
 hydra:
