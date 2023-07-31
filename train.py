@@ -1,247 +1,133 @@
-import hydra
-import hashlib
 import yaml
+import os
 from omegaconf import OmegaConf
 
-import numpy as np
-import torch
-from tqdm import tqdm
-from itertools import product
-
-import imageio
-import pickle
 import pathlib
 import logging
 import wandb
 import datetime
-import os
-import sys
-# sys.path.append("../../")
-from mineclip import MineCLIP
-from mineclip.mineagent.batch import Batch
-from mineclip import CombatSpiderDenseRewardEnv
-from mineclip import HuntCowDenseRewardEnv
-from RewardEnv.milk_cow import MilkCowDenseRewardEnv
+
+import torch
 from models import PPO, SImodel
+from utils import *
 
-import pdb
-
-# dir_path = os.path.dirname(os.path.realpath(__file__))
-dir_path = pathlib.Path(__file__).parent.resolve()
-res_path = dir_path.joinpath("results")
 time = datetime.datetime.now().strftime("%y%m%d_%H%M")
-if not res_path.exists():
-    res_path.mkdir()
-res_path = res_path.joinpath(f"run_{time}")
-if not res_path.exists():
-    res_path.mkdir()
-log_path = res_path.joinpath(f"output.log")
+dir_path = pathlib.Path(__file__).parent.resolve()
+res_path = dir_path.joinpath(f"results/run_{time}")
+res_path.mkdir(parents=True, exist_ok=True)
 
-logging.basicConfig(filename=log_path,
-                    format="[%(asctime)s] [%(levelname)8s] --- %(message)s (%(filename)s:%(lineno)s)", datefmt="%Y-%m-%d %H:%M:%S",
-                    level=logging.INFO,
-                    filemode= 'w')
-
-# wandb.init(
-#     # set the wandb project where this run will be logged
-#     project="MineDojo-PPO-SI",
-    
-#     # track hyperparameters and run metadata
-#     config={
-#     "learning_rate": 1e-4,
-#     "architecture": "PPO_SI",
-#     "environment": "HuntCowDenseReward",
-#     "epochs": 20,
-#     }
-# )
-
-# os.environ['IMAGEIO_FFMPEG_EXE'] = '/opt/homebrew/bin/ffmpeg'
-## DUMMY ENV
-class MineEnv:
-    def __init__(self):
-        self.val = 0
-        self._elapsed_steps = 0
-        self._episode_len = 500
-        with open(dir_path.joinpath("observation_dict.pkl"), 'rb') as f:
-            self.obs = pickle.load(f)
-
-    def reset(self):
-        self._elapsed_steps = 0
-        return self.obs
-
-    def step(self, action):
-        self._elapsed_steps += 1
-        reward = 1 + np.random.normal(0, 0.01)
-        return self.obs, reward, False, 1
-
-    def close(self):
-        return
-    
-def set_MineCLIP(cfg, device):
-    OmegaConf.set_struct(cfg, False)
-    ckpt = cfg.pop("ckpt")
-    OmegaConf.set_struct(cfg, True)
-
-    assert (
-        hashlib.md5(open(ckpt.path, "rb").read()).hexdigest() == ckpt.checksum
-    ), "broken ckpt"
-
-    model = MineCLIP(**cfg).to(device)
-    model.load_ckpt(ckpt.path, strict=True)
-    logging.info("MineCLIP successfully loaded with checkpoint")
-    return model
-
-def preprocess_obs(env_obs, device, prev_action, prompt, model):
-    
-    rgb_img = torch.tensor(env_obs['rgb'].copy()).float().to(device)
-    with torch.no_grad():
-        rgb_feat = model.clip_model.encode_image(rgb_img.unsqueeze(dim=0))
-    # rgb_feat = torch.rand((1,512), device=device)
-    obs = {
-        "rgb_feat": rgb_feat,
-        "compass": torch.tensor(np.append(
-            np.sin(env_obs['location_stats']['pitch']), [np.cos(env_obs['location_stats']['pitch']),
-            np.sin(env_obs['location_stats']['yaw']), np.cos(env_obs['location_stats']['yaw'])]), device=device).unsqueeze(dim=0),
-        "gps": torch.tensor(env_obs['location_stats']['pos'], device=device).unsqueeze(dim=0),
-        "voxels": torch.tensor(env_obs['voxels']['block_meta'], device=device).reshape(1,27), 
-        "biome_id": torch.tensor(env_obs['location_stats']['biome_id'], device=device).unsqueeze(dim=0),
-        "prev_action": torch.tensor(prev_action, device=device),
-        "prompt": prompt.to(device),
-    }
-    frame = env_obs['rgb'].transpose(1,2,0)
-
-    return Batch(obs=obs), frame
-
-action_array = np.array([
-        [1, 0, 0, 12, 12, 0, 0, 0],
-        [1, 0, 1, 12, 12, 0, 0, 0],
-        [0, 0, 1, 12, 12, 0, 0, 0],
-        [2, 0, 0, 12, 12, 0, 0, 0],
-        [0, 1, 0, 12, 12, 0, 0, 0],
-        [0, 2, 0, 12, 12, 0, 0, 0],
-        [0, 0, 0, 12, 12, 1, 0, 0],
-        [0, 0, 0, 12, 12, 3, 0, 0],
-    ])
-no_action = np.array([48])
-camera = np.zeros((81, 8))
-perm = product(np.arange(8,17), repeat=2)
-camera[:,3:5] = np.array(list(perm))
-action_array = np.concatenate((action_array, camera), axis=0)
-
-def complete_action(action):
-    """
-    Map agent action to env action.
-    """
-    assert action.ndim == 2
-    action = action[0]
-    action = action.cpu().numpy()
-
-    return action, action_array[action.item()]
-
-# @hydra.main(config_name="config", config_path=".", version_base="1.1")
 def main():
-
     with open(dir_path.joinpath("config.yaml"), "r") as f:
         cfg = yaml.safe_load(f)
     cfg = OmegaConf.create(cfg)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
     OmegaConf.set_struct(cfg, False)
     cfg_mineclip = cfg.pop("mineclip")
     OmegaConf.set_struct(cfg, True)
+    cfg_params = cfg.hyperparameters
+    init_log(cfg_params, res_path)                                                  #Initialize logging and wandb
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     ppo_agent = PPO(cfg, device)
     si_model = SImodel(cfg, device)
     mineCLIP = set_MineCLIP(cfg_mineclip, device)
 
-    prompt = "Hunt a cow"
+    task = cfg_params.task
     with torch.no_grad():
-        prompt = mineCLIP.clip_model.encode_text(prompt)
-    # env = MineEnv()
-    # env = HuntCowDenseRewardEnv(
-    #     step_penalty=0,
-    #     attack_reward=1,
-    #     nav_reward_scale=5,
-    #     success_reward=200,
-    # )
-    env = MilkCowDenseRewardEnv(
-        step_penalty=0,
-        attack_reward=0,
-        nav_reward_scale=10,
-        success_reward=200,
-    )
+        prompt = mineCLIP.clip_model.encode_text(task)
 
+    action_array, no_action = actions_array(rango=9)
+    env = create_env(task)
     state = env.reset()
     state, frame = preprocess_obs(state, device, no_action, prompt, mineCLIP)
     
-    ep_reward, total_timesteps, num_ep, num_attack, num_use = 0, 0, 0, 0, 0
-    steps_per_epoch = 100000
-    epochs = 20
+    num_ep = 0
+    steps_per_epoch = cfg_params.PPO_buffer_size
+    epochs = cfg_params.epochs
 
     for epoch in range(epochs):              
-        for t in range(steps_per_epoch):                 # episode length
+        for t in range(steps_per_epoch):                                            # episode length
+
             action, log_prob, state_value = ppo_agent.process(state)
-            if action.item() == 7:
-                num_attack += 1
-            if action.item() == 6:
-                num_use += 1
-            action, env_action = complete_action(action)
+            action, env_action = complete_action(action, action_array)
 
             next_state, reward, done, _ = env.step(env_action)
-
             next_state, next_frame = preprocess_obs(next_state, device, action, prompt, mineCLIP)
-            total_timesteps += 1
-            ep_reward += reward
 
             ppo_agent.buffer.store(state, action, reward, log_prob, state_value, frame)
-            # ppo_agent.buffer.rewards.append(reward)
-            # ppo_agent.buffer.is_terminals.append(done)
 
             # Update observation
             state, frame = next_state, next_frame
+
             timeout = (env._elapsed_steps == env._episode_len)
             terminal = (done or timeout)
             epoch_ended = (t == steps_per_epoch-1)
 
             if terminal or epoch_ended:
                 if epoch_ended and not terminal:
-                    logging.info(f'Warning: trajectory cut off by epoch at {ep_len} steps.', flush=True)
+                    logging.info(f'Warning: trajectory cut off by epoch at {t} steps.', flush=True)
 
                 if timeout or epoch_ended:
                     _, _, last_value = ppo_agent.process(state)
                     last_value = last_value.item()
                 else:
                     last_value = 0
-
-                if ep_reward > 100:
-                    ppo_agent.buffer.make_video(res_path, ep_reward)
-                    logging.info('making video')
-
+                    
                 trajectory = ppo_agent.buffer.calc_advantages(last_val=last_value)
                 si_model.buffer.store(trajectory)
+
                 num_ep += 1
+                ep_reward = trajectory.total_return.item()
+                num_attack = (trajectory.actions == 7).sum().item()
+                num_use = (trajectory.actions == 6).sum().item()
+
+                if ep_reward > cfg_params.video_min_rew:
+                    logging.info('making video')
+                    ppo_agent.buffer.make_video(res_path, ep_reward, num_ep)
+
                 logging.info(f'step: {t+1}, epoch: {epoch+1}, episode: {num_ep}, ep_rew: {ep_reward:.2f}, atk: {num_attack}, use: {num_use} ')
-                # wandb.log({
-                #     "episode_reward": ep_reward,
-                #     "attack": num_attack,
-                #     "use": num_use,
-                #     "episode": num_ep,
-                # })
+                wandb.log({
+                    "episode_reward": ep_reward,
+                    "attack": num_attack,
+                    "use": num_use,
+                    "episode": num_ep,
+                })
                 state = env.reset()
                 state, frame = preprocess_obs(state, device, no_action, prompt, mineCLIP)
-                ep_reward, ep_len, num_attack, num_use = 0, 0, 0, 0
 
         # Update PPO after buffer is full
         ppo_agent.update()
-        ppo_agent.save_model(res_path, epoch)
 
         # Self Imitation learning training
-        weights = ppo_agent.policy.actor.state_dict()
-        si_model.train(weights=weights)
-        ppo_agent.policy.actor.load_state_dict(si_model.model.state_dict())
+        if si_model.buffer.traj_number > 0:
+            weights = ppo_agent.policy.actor.state_dict()
+            si_model.train(weights=weights)
+            ppo_agent.policy.actor.load_state_dict(si_model.model.state_dict())
 
+        ppo_agent.save_model(res_path, epoch)
     env.close()
+
+def init_log(cfg, res_path):
+    filename = res_path.joinpath(f"output.log")
+    if not cfg.file_logging:
+        filename = None
+    logging.basicConfig(filename=filename,
+                    format="[%(asctime)s] [%(levelname)8s] --- %(message)s (%(filename)s:%(lineno)s)", datefmt="%Y-%m-%d %H:%M:%S",
+                    level=logging.INFO,
+                    filemode= 'w')
+    
+    if not cfg.wandb_init:
+        os.environ["WANDB_MODE"] = "disabled"
+
+    wandb.init(
+        # set the wandb project where this run will be logged
+        project=f"MineDojo-PPO-SI_{cfg.task.replace(' ','')}",
+        group=f"action{cfg.number_actions}",
+        name=f"mean{cfg.buffer_mean}_std{cfg.buffer_std}_delta{cfg.buffer_delta}_batch{cfg.batch_size}_IL{cfg.imitation_learning}",
+        
+        # track hyperparameters and run metadata
+        config= dict(cfg)
+    )
 
 if __name__ == "__main__":
     main()

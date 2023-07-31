@@ -38,21 +38,36 @@ actor:
   hidden_depth: 3
 
 mineclip:
-
   arch: "vit_base_p16_fz.v2.t2"
   hidden_dim: 512
   image_feature_dim: 512
   mlp_adapter_spec: "v0-2.t0"
   pool_type: "attn.d2.nh8.glusw"  # filled by variant
   resolution: [160, 256]
-
   ckpt:
     path:  /home/kenjic/documents/MineDojo_PPO/weights/attn.pth # filled by users
     checksum: "b5ece9198337cfd117a3bfbd921e56da"
 
-hydra:
-  job:
-    chdir: true
-  run:
-    dir: .
-  output_subdir: null
+hyperparameters:
+  task: "hunt a cow"
+  number_actions: 89
+  epochs: 10
+  PPO_buffer_size: 100000
+  SI_buffer_size: 50
+  buffer_mean: 20
+  buffer_std: 0
+  buffer_delta: 0
+  video_min_rew: 60
+  batch_size: 10000
+  imitation_learning: false
+  demos_path: ""
+  file_logging: true
+  wandb_init: false
+
+
+# hydra: 
+#   job:
+#     chdir: true
+#   run:
+#     dir: .
+#   output_subdir: null

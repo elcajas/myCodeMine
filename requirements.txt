@@ -3,3 +3,5 @@ wandb
 imageio
 imageio-ffmpeg
 matplotlib
+
+torchvision

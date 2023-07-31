@@ -6,7 +6,7 @@ dir_path = pathlib.Path(__file__).parent.resolve()
 
 ## DUMMY ENV
 class MineEnv:
-    def __init__(self):
+    def __init__(self, step_penalty, nav_reward_scale, attack_reward, success_reward):
         self.val = 0
         self._elapsed_steps = 0
         self._episode_len = 500
