@@ -65,7 +65,7 @@ def main():
 
             if terminal or epoch_ended:
                 if epoch_ended and not terminal:
-                    logging.info(f'Warning: trajectory cut off by epoch at {t} steps.', flush=True)
+                    logging.info(f'Warning: trajectory cut off by epoch at {t} steps.')
 
                 if timeout or epoch_ended:
                     _, _, last_value = ppo_agent.process(state)
