@@ -49,16 +49,16 @@ mineclip:
     checksum: "b5ece9198337cfd117a3bfbd921e56da"
 
 hyperparameters:
-  task: "hunt a cow"
+  task: "dummy env"
   number_actions: 89
   epochs: 10
-  PPO_buffer_size: 100000
+  PPO_buffer_size: 1000
   SI_buffer_size: 50
-  buffer_mean: 20
+  buffer_mean: 0.1
   buffer_std: 0
   buffer_delta: 0
-  video_min_rew: 60
-  batch_size: 10000
+  video_min_rew: 10
+  batch_size: 1000
   imitation_learning: false
   demos_path: ""
   file_logging: true

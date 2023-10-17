@@ -44,7 +44,7 @@ def preprocess_obs(env_obs, device, prev_action, prompt, model):
         "voxels": torch.tensor(env_obs['voxels']['block_meta'], device=device).reshape(1,27), 
         "biome_id": torch.tensor(env_obs['location_stats']['biome_id'], device=device).unsqueeze(dim=0),
         "prev_action": torch.tensor(prev_action, device=device),
-        "prompt": prompt.to(device),
+        "prompt": prompt,
     }
     frame = env_obs['rgb'].transpose(1,2,0)
 
@@ -60,6 +60,30 @@ def complete_action(action, action_array):
 
     return action, action_array[action.item()]
 
+def select_action(t, action_array):
+    t = t % 13
+    if t > 0:
+        action = np.array([49])
+    else:
+        action = np.array([7])
+
+    return action, action_array[action.item()]
+
+def reduced_action(action):
+    action_array = np.array([
+        [0, 0, 0, 12, 12, 1, 0, 0],    # use
+        [0, 0, 0, 12, 12, 3, 0, 0],    # attack
+        [0, 0, 0, 12, 13, 0, 0, 0],    # rotate right
+        [0, 0, 0, 12, 11, 0, 0, 0],    # rotate left
+        [0, 0, 0, 12, 12, 0, 0, 0],    # no_op
+        [0, 0, 0, 12, 12, 0, 0, 0],    # no_op
+        [0, 0, 0, 12, 12, 0, 0, 0],    # no_op
+        [0, 0, 0, 12, 12, 0, 0, 0],    # no_op
+    ])
+    action = action[0]
+    action = action.cpu().numpy()
+    return action, action_array[action.item()]
+
 def actions_array(rango):  # Rango must be odd (3, 9)    3 -> (-15, 0 , +15)   9 -> (-60, -45, -30, -15, 0 , +15, +30, +45, +60)
 
     action_array = np.array([
@@ -69,7 +93,7 @@ def actions_array(rango):  # Rango must be odd (3, 9)    3 -> (-15, 0 , +15)   9
         [2, 0, 0, 12, 12, 0, 0, 0],    # backward
         [0, 1, 0, 12, 12, 0, 0, 0],    # left
         [0, 2, 0, 12, 12, 0, 0, 0],    # right
-        [0, 0, 0, 12, 12, 3, 0, 0],    # use
+        [0, 0, 0, 12, 12, 1, 0, 0],    # use
         [0, 0, 0, 12, 12, 3, 0, 0],    # attack
     ])
 

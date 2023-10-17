@@ -28,6 +28,7 @@ class PPOBuffer:
         
         self.frames = []
         self.last_trajectory = Batch(tmp=np.array([0]))
+        self.last_episode = []
 
         self.advantages = np.zeros(capacity, dtype=np.float32)
         self.returns = np.zeros(capacity, dtype=np.float32)
@@ -37,7 +38,7 @@ class PPOBuffer:
         self.pointer, self.path_start_idx, self.max_capacity = 0, 0, capacity 
     
     def store(self, state, action, reward, log_prob, state_value, frame):
-
+        print(self.pointer, self.max_capacity)
         assert self.pointer < self.max_capacity
 
         self.states[self.pointer] = state
@@ -49,16 +50,23 @@ class PPOBuffer:
         self.frames.append(frame)
         self.pointer += 1
 
+    def store_episode(self, obs, reward, done, info):
+        self.last_episode.append((obs, reward, done, info))
+
     def calc_advantages(self, last_val=0):
         path_slice = slice(self.path_start_idx, self.pointer)
-        rewards = self.rewards[path_slice]
         values = np.append(self.state_values[path_slice], last_val)
+        rewards = self.rewards[path_slice]
+        rewards[:-2] = rewards[2:]
+        rewards[-2:] = [0, 0]
+
         trajectory = Batch.cat(self.states[path_slice])
-        traj = Batch.cat(self.states[path_slice])
         trajectory['actions'] = torch.tensor(self.actions[path_slice])
-        trajectory['rewards'] = torch.tensor(self.rewards[path_slice])
+        trajectory['rewards'] = torch.tensor(rewards)
+
+        traj = {'states': self.last_episode.copy()}
         traj['actions'] = torch.tensor(self.actions[path_slice])
-        traj['rewards'] = torch.tensor(self.rewards[path_slice])
+        traj['rewards'] = torch.tensor(rewards)
 
 
         if trajectory.rewards.sum() >= 200:
@@ -83,7 +91,9 @@ class PPOBuffer:
         self.path_start_idx = self.pointer
         self.last_trajectory = trajectory
         self.frames = []
-        return traj
+        self.last_episode = []
+
+        return traj, trajectory
 
     def get(self, device):
         
@@ -124,8 +134,36 @@ class PPOBuffer:
             stat_dir.mkdir()
 
         stat_path = stat_dir.joinpath(f"stats_{episode_number}_{reward:.2f}.png")
-        self.plot_statistics(stat_path)
+        # self.plot_statistics(stat_path)
     
+    def get_images(self, path: pathlib.Path, reward, episode_number):
+        images_dir = path.joinpath("images")
+        if not images_dir.exists():
+            images_dir.mkdir()
+
+        frames = self.last_trajectory.frames
+        actions = self.last_trajectory.actions
+        rewards = self.last_trajectory.rewards
+        breakpoint()
+        indices = (rewards > 0).nonzero(as_tuple=True)[0]
+        number_images = 7
+        r = number_images//2
+
+        fig, ax = plt.subplots(len(indices), number_images, figsize=(50,10))
+        for i, ind in enumerate(indices):
+            for c in range(number_images):
+                n = ind+c-r
+                if n >= len(rewards): continue
+                ax[i][c].imshow(frames[n])
+                ax[i][c].set_title(f'frame: {n}, reward: {rewards[n]}, action: {actions[n]}')
+            
+            for a in ax[i]:
+                a.axis('off')
+        img_path = images_dir.joinpath(f'episode_{episode_number}_{reward:.2f}.png')
+        fig.savefig(img_path)
+        plt.close(fig)
+        breakpoint()
+
     def plot_statistics(self, path:pathlib.Path):
         
         c = Counter(self.last_trajectory.actions.numpy())
@@ -144,6 +182,23 @@ class PPOBuffer:
         fig.savefig(path)
         plt.close(fig)
     
+    def plot_probs(self, probs, path:pathlib.Path):
+
+        probs = probs.detach().cpu()
+
+        fig, ax = plt.subplots(figsize=(10,4))
+        ax.stem(probs*100, markerfmt="", basefmt="-b")  # Plot only positive frequencies
+        ax.set_xlabel('action number')
+        ax.set_ylabel('probability')
+        ax.set_xlim(-1, self.number_actions+1)
+        ax.set_xticks(np.arange(0, self.number_actions, 5))
+
+        ax.grid(which='major', color='#DDDDDD', linewidth=0.8)
+        ax.grid(which='minor', color='#EEEEEE', linestyle=':', linewidth=0.6)
+        ax.minorticks_on()
+        fig.savefig(path)
+        plt.close(fig)
+
     def save_data(self, path: pathlib.Path):
         path = path.joinpath('episode_data.pkl')
         with open(path, 'wb') as f:

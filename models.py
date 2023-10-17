@@ -10,6 +10,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
+import numpy as np
 
 from mineclip.mineagent import features as F
 from mineclip import SimpleFeatureFusion, MineAgent, MultiCategoricalActor
@@ -19,6 +20,8 @@ from mineclip.utils import build_mlp
 from Data.buffers import PPOBuffer, SIBuffer
 from Data.datasets import custom_collate_fn
 from utils import smoothing
+
+import matplotlib.pyplot as plt
     
 class Critic(nn.Module):
     def __init__(
@@ -101,7 +104,7 @@ class ActorCritic(nn.Module):
         logit_batch = self.actor.agent(state)
         action = logit_batch.act
         action_logprob = logit_batch.dist.log_prob(action)
-        
+
         state_feat, _ = self.actor.actor.preprocess(state.obs)
         state_val, _ = self.critic(state_feat)
 
@@ -109,7 +112,7 @@ class ActorCritic(nn.Module):
     
     def eval(self, state, action):
         logit_batch = self.actor.agent(state)
-        action_logprobs = logit_batch.dist.log_prob(action)
+        action_logprobs = logit_batch.dist._dists[0].log_prob(action)
         action_probs = logit_batch.dist._dists[0].probs
         dist_entropy = logit_batch.dist.entropy()
         
@@ -169,7 +172,7 @@ class PPO:
                 state_batch, action_batch, advantage_batch, old_logp_batch, return_batch = batch
 
                 logp_batch, value_batch, entropy_batch, probs_batch = self.policy.eval(state_batch, action_batch.unsqueeze(dim=0))
-                
+ 
                 # Define Loss function
                 ratios = torch.exp(logp_batch - old_logp_batch)
                 surr1 = ratios * advantage_batch
