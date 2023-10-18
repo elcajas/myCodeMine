@@ -144,25 +144,36 @@ class PPOBuffer:
         frames = self.last_trajectory.frames
         actions = self.last_trajectory.actions
         rewards = self.last_trajectory.rewards
-        breakpoint()
-        indices = (rewards > 0).nonzero(as_tuple=True)[0]
-        number_images = 7
-        r = number_images//2
 
-        fig, ax = plt.subplots(len(indices), number_images, figsize=(50,10))
+        indices = (rewards > 0).nonzero(as_tuple=True)[0]
+        l_ind = len(indices)
+        number_images = 5
+        r = number_images // 2
+
+        fig, ax = plt.subplots(l_ind, number_images, figsize=(number_images*10, l_ind*7))
+        fig.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.1, wspace=0.02, hspace=0.07)
         for i, ind in enumerate(indices):
             for c in range(number_images):
                 n = ind+c-r
-                if n >= len(rewards): continue
-                ax[i][c].imshow(frames[n])
-                ax[i][c].set_title(f'frame: {n}, reward: {rewards[n]}, action: {actions[n]}')
-            
-            for a in ax[i]:
-                a.axis('off')
+                subplot_index = c if l_ind == 1 else (i, c)
+                if n > len(rewards): continue
+                if n == len(rewards):
+                    ax[subplot_index].imshow(frames[n])
+                else:
+                    ax[subplot_index].imshow(frames[n])
+                    ax[subplot_index].set_title(f'frame: {n}, reward: {rewards[n]}, action: {actions[n]}', fontsize=25)
+
+            # Turn off the axes for the current subplot
+            if l_ind == 1:
+                for a in ax:
+                    a.axis('off')
+            else:
+                for a in ax[i]:
+                    a.axis('off')
+
         img_path = images_dir.joinpath(f'episode_{episode_number}_{reward:.2f}.png')
         fig.savefig(img_path)
         plt.close(fig)
-        breakpoint()
 
     def plot_statistics(self, path:pathlib.Path):
         
