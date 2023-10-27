@@ -11,7 +11,7 @@ class MineEnv:
         self._elapsed_steps = 0
         with open(dir_path.joinpath("episode_dict.pkl"), 'rb') as f:
             self.episode = pickle.load(f)
-        self._episode_len = len(self.episode['states'])
+        self._episode_len = len(self.episode['rewards'])
 
     def reset(self):
         self._elapsed_steps = 0
@@ -28,9 +28,9 @@ class MineEnv:
         #     reward = 0
         # done = False
         # info = None
-        obs = self.episode['states'][self._elapsed_steps+1]
-        _, reward, done, info = self.episode['states'][self._elapsed_steps]
+
         self._elapsed_steps += 1
+        obs, reward, done, info = self.episode['states'][self._elapsed_steps]
 
         return obs, reward, done, info
 

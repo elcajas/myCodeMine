@@ -38,7 +38,7 @@ class PPOBuffer:
         self.pointer, self.path_start_idx, self.max_capacity = 0, 0, capacity 
     
     def store(self, state, action, reward, log_prob, state_value, frame):
-        print(self.pointer, self.max_capacity)
+
         assert self.pointer < self.max_capacity
 
         self.states[self.pointer] = state
@@ -49,23 +49,29 @@ class PPOBuffer:
 
         self.frames.append(frame)
         self.pointer += 1
+    
+    def add_last_frame(self, last_frame):
+        self.frames.append(last_frame)
 
     def store_episode(self, obs, reward, done, info):
         self.last_episode.append((obs, reward, done, info))
 
-    def calc_advantages(self, last_val=0):
+    def calc_advantages(self, last_val=0, no_op=0):
         path_slice = slice(self.path_start_idx, self.pointer)
         values = np.append(self.state_values[path_slice], last_val)
         rewards = self.rewards[path_slice]
-        rewards[:-2] = rewards[2:]
-        rewards[-2:] = [0, 0]
+        actions = self.actions[path_slice]
+        # rewards[:-2] = rewards[2:]
+        # rewards[-2:] = [0, 0]
+        actions[2:] = actions[:-2]
+        actions[:2] = [no_op, no_op]
 
         trajectory = Batch.cat(self.states[path_slice])
-        trajectory['actions'] = torch.tensor(self.actions[path_slice])
+        trajectory['actions'] = torch.tensor(actions)
         trajectory['rewards'] = torch.tensor(rewards)
 
         traj = {'states': self.last_episode.copy()}
-        traj['actions'] = torch.tensor(self.actions[path_slice])
+        traj['actions'] = torch.tensor(actions)
         traj['rewards'] = torch.tensor(rewards)
 
 
@@ -134,7 +140,7 @@ class PPOBuffer:
             stat_dir.mkdir()
 
         stat_path = stat_dir.joinpath(f"stats_{episode_number}_{reward:.2f}.png")
-        # self.plot_statistics(stat_path)
+        self.plot_statistics(stat_path)
     
     def get_images(self, path: pathlib.Path, reward, episode_number):
         images_dir = path.joinpath("images")
@@ -147,7 +153,7 @@ class PPOBuffer:
 
         indices = (rewards > 0).nonzero(as_tuple=True)[0]
         l_ind = len(indices)
-        number_images = 5
+        number_images = 7
         r = number_images // 2
 
         fig, ax = plt.subplots(l_ind, number_images, figsize=(number_images*10, l_ind*7))
@@ -172,7 +178,7 @@ class PPOBuffer:
                     a.axis('off')
 
         img_path = images_dir.joinpath(f'episode_{episode_number}_{reward:.2f}.png')
-        fig.savefig(img_path)
+        fig.savefig(img_path, bbox_inches='tight')
         plt.close(fig)
 
     def plot_statistics(self, path:pathlib.Path):

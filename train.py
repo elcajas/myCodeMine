@@ -34,7 +34,7 @@ def main():
     ppo_agent = PPO(cfg, device)
     si_model = SImodel(cfg, device)
     mineCLIP = set_MineCLIP(cfg_mineclip, device)
-    ppo_agent.policy.load_state_dict(torch.load('/home/kenjic/documents/MineDojo_PPO/PPO_dummy/results/run_231012_1540/weights/model_epoch_10.pth'))
+    # ppo_agent.policy.load_state_dict(torch.load('/home/kenjic/documents/MineDojo_PPO/PPO_dummy/results/run_231012_1540/weights/model_epoch_10.pth'))
 
     task = cfg_params.task
     with torch.no_grad():
@@ -45,7 +45,7 @@ def main():
     action_array, no_action = actions_array(rango)
 
     # no_action = np.array([4])
-    
+
     env = create_env(task)
     state = env.reset()
     # ppo_agent.buffer.store_episode(state, 0, False, {})
@@ -86,8 +86,9 @@ def main():
                     last_value = last_value.item()
                 else:
                     last_value = 0
-                    
-                traj, trajectory = ppo_agent.buffer.calc_advantages(last_val=last_value)
+                
+                ppo_agent.buffer.add_last_frame(frame)
+                traj, trajectory = ppo_agent.buffer.calc_advantages(last_val=last_value, no_op=no_action.item())
                 # si_model.buffer.store(trajectory)
 
                 num_ep += 1
@@ -122,7 +123,7 @@ def main():
         #     si_model.train(weights=weights)
         #     ppo_agent.policy.actor.load_state_dict(si_model.model.state_dict())
 
-        # ppo_agent.save_model(res_path, epoch)
+        ppo_agent.save_model(res_path, epoch)
     env.close()
 
 def init_log(cfg, res_path):
