@@ -32,6 +32,11 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     ppo_agent = PPO(cfg, device)
+    if cfg_params.load_checkpoint:
+        ppo_agent.load_model(cfg_params.checkpoint_dir, cfg_params.checkpoint_epoch)
+    else:
+        ppo_agent.save_model(res_path, 0)
+
     si_model = SImodel(cfg, device)
     mineCLIP = set_MineCLIP(cfg_mineclip, device)
     # ppo_agent.policy.load_state_dict(torch.load('/home/kenjic/documents/MineDojo_PPO/PPO_dummy/results/run_231012_1540/weights/model_epoch_10.pth'))
@@ -140,7 +145,7 @@ def init_log(cfg, res_path):
         # set the wandb project where this run will be logged
         project=f"MineDojo-PPO-SI_{cfg.task.replace(' ','')}",
         # group=f"action{cfg.number_actions}",
-        name=f"dummy_actions_{cfg.number_actions}_mean{cfg.buffer_mean}_std{cfg.buffer_std}_delta{cfg.buffer_delta}_batch{cfg.batch_size}_IL{cfg.imitation_learning}",
+        name=f"actions_{cfg.number_actions}_mean{cfg.buffer_mean}_std{cfg.buffer_std}_delta{cfg.buffer_delta}_batch{cfg.batch_size}_IL{cfg.imitation_learning}",
         
         # track hyperparameters and run metadata
         config= dict(cfg)

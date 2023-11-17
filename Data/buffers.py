@@ -61,10 +61,11 @@ class PPOBuffer:
         values = np.append(self.state_values[path_slice], last_val)
         rewards = self.rewards[path_slice]
         actions = self.actions[path_slice]
-        # rewards[:-2] = rewards[2:]
-        # rewards[-2:] = [0, 0]
-        actions[2:] = actions[:-2]
-        actions[:2] = [no_op, no_op]
+        rewards[:-2] = rewards[2:]
+        rewards[-2:] = [0, 0]
+        assert len(actions) >=3, f'length of actions: {len(actions)}'
+        # actions[2:] = actions[:-2]
+        # actions[:2] = [no_op, no_op]
 
         trajectory = Batch.cat(self.states[path_slice])
         trajectory['actions'] = torch.tensor(actions)

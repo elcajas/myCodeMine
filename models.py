@@ -158,8 +158,18 @@ class PPO:
             weights_dir_path.mkdir()
         
         weight_path = weights_dir_path.joinpath(f"model_epoch_{epoch+1}.pth")
+        logging.info(f'Saving checkpoint in {weight_path} for epoch {epoch}')
         torch.save(self.policy.state_dict(), weight_path)
+    
+    def load_model(self, dir_path, epoch):
+        logging.info(f'Loading checkpoint from {dir_path} in epoch {epoch}')
+        checkpoint_path = pathlib.Path(dir_path) / f"model_epoch_{epoch}.pth"
 
+        #Check if the checkpoint file exists
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint file for epoch {epoch} not found at {checkpoint_path}")
+
+        self.policy.load_state_dict(torch.load(checkpoint_path))
 
     def update(self):
 

@@ -53,14 +53,22 @@ hyperparameters:
   number_actions: 89
   epochs: 10
   PPO_buffer_size: 100000
+  batch_size: 10000
+
   SI_buffer_size: 50
   buffer_mean: 0.1
   buffer_std: 0
   buffer_delta: 0
+
   video_min_rew: 30
-  batch_size: 10000
+
+  load_checkpoint: false
+  checkpoint_dir: "/home/user/Mine/results/run_231109_0814/weights"
+  checkpoint_epoch: 0
+
   imitation_learning: false
   demos_path: ""
+  
   file_logging: true
   wandb_init: false
 
