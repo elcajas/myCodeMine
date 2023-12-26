@@ -157,7 +157,7 @@ class PPO:
         if not weights_dir_path.exists():
             weights_dir_path.mkdir()
         
-        weight_path = weights_dir_path.joinpath(f"model_epoch_{epoch+1}.pth")
+        weight_path = weights_dir_path.joinpath(f"model_epoch_{epoch}.pth")
         logging.info(f'Saving checkpoint in {weight_path} for epoch {epoch}')
         torch.save(self.policy.state_dict(), weight_path)
     

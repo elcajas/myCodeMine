@@ -45,7 +45,7 @@ mineclip:
   pool_type: "attn.d2.nh8.glusw"  # filled by variant
   resolution: [160, 256]
   ckpt:
-    path:  /home/kenjic/documents/MineDojo_PPO/weights/attn.pth # filled by users
+    path:  /home/user/weights/attn.pth # filled by users
     checksum: "b5ece9198337cfd117a3bfbd921e56da"
 
 hyperparameters:

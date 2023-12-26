@@ -39,7 +39,6 @@ def main():
 
     si_model = SImodel(cfg, device)
     mineCLIP = set_MineCLIP(cfg_mineclip, device)
-    # ppo_agent.policy.load_state_dict(torch.load('/home/kenjic/documents/MineDojo_PPO/PPO_dummy/results/run_231012_1540/weights/model_epoch_10.pth'))
 
     task = cfg_params.task
     with torch.no_grad():
@@ -59,8 +58,9 @@ def main():
     num_ep = 0
     steps_per_epoch = cfg_params.PPO_buffer_size
     epochs = cfg_params.epochs
+    in_epoch = cfg_params.checkpoint_epoch
 
-    for epoch in range(epochs):              
+    for epoch in range(in_epoch, in_epoch + epochs):              
         for t in range(steps_per_epoch):                                            # episode length
 
             action, log_prob, state_value = ppo_agent.process(state)
@@ -128,7 +128,7 @@ def main():
         #     si_model.train(weights=weights)
         #     ppo_agent.policy.actor.load_state_dict(si_model.model.state_dict())
 
-        ppo_agent.save_model(res_path, epoch)
+        ppo_agent.save_model(res_path, epoch+1)
     env.close()
 
 def init_log(cfg, res_path):
