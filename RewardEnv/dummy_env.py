@@ -1,6 +1,7 @@
 import pickle
 import pathlib
 import numpy as np
+import imageio
 
 dir_path = pathlib.Path(__file__).parent.resolve()
 
@@ -36,3 +37,24 @@ class MineEnv:
 
     def close(self):
         return None
+    
+    def show_episode(self):
+        frames = []
+        for state in self.episode['states']:
+            frame = state[0]['rgb'].transpose(1, 2, 0) # Change to (H, W, C)
+            frames.append(frame)
+        
+        writer = imageio.get_writer('dummy_episode.mp4', fps=10)
+        for frame in frames:
+            writer.append_data(frame)
+        writer.close()
+
+if __name__ == "__main__":
+    env = MineEnv(
+        step_penalty=0,
+        nav_reward_scale=1,
+        attack_reward=1,
+        success_reward=1
+    )
+    import ipdb; ipdb.set_trace()
+    env.show_episode()

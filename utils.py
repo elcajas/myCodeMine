@@ -3,6 +3,7 @@ import logging
 from omegaconf import OmegaConf
 
 import torch
+import torch.nn as nn
 import numpy as np
 from itertools import product
 import string
@@ -11,9 +12,25 @@ from mineclip import MineCLIP
 from mineclip.mineagent.batch import Batch
 import RewardEnv as Envs
 
+import groundingdino.datasets.transforms as T
+from PIL import Image
+from inference import load_model, load_image, predict, annotate
+import cv2
+
 import os
 import sys
 # sys.path.append("../../")
+
+# calculated from 21K video clips, which contains 2.8M frames
+MC_IMAGE_MEAN = (0.3331, 0.3245, 0.3051)
+MC_IMAGE_STD = (0.2439, 0.2493, 0.2873)
+
+BOX_TRESHOLD = 0.35
+TEXT_TRESHOLD = 0.25
+
+def set_gdino(cfg, device):
+    model = load_model("../GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py", "../GroundingDINO/weights/groundingdino_swint_ogc.pth")
+    return model
 
 def set_MineCLIP(cfg, device):
     OmegaConf.set_struct(cfg, False)
@@ -29,12 +46,42 @@ def set_MineCLIP(cfg, device):
     logging.info("MineCLIP successfully loaded with checkpoint")
     return model
 
+def preprocess_image(images, model, device):
+    if isinstance(model, MineCLIP):
+        img_tensor = torch.from_numpy(images).to(device)
+        with torch.no_grad():
+            return model.forward_image_features(img_tensor.unsqueeze(dim=0))
+    else:
+        transform = T.Compose(
+            [
+                T.RandomResize([800], max_size=1333),
+                T.ToTensor(),
+                T.Normalize(MC_IMAGE_MEAN, MC_IMAGE_STD),
+            ]
+        )
+        img_array = images.transpose(1,2,0)
+        img = Image.fromarray(img_array)
+        img_transformed, _ = transform(img, None)
+        
+        TEXT_PROMPT = "spider . cow . sky . animal . tree ."
+        logits = predict(
+            model=model,
+            image=img_transformed,
+            caption=TEXT_PROMPT,
+            box_threshold=BOX_TRESHOLD,
+            text_threshold=TEXT_TRESHOLD
+        )
+        # annotated_frame = annotate(image_source=img_array, boxes=boxes, logits=logits, phrases=phrases)
+        # cv2.imwrite("annotated_image.jpg", annotated_frame)
+        return logits
+
+
 def preprocess_obs(env_obs, device, prev_action, prompt, model):
-    
-    rgb_img = torch.tensor(env_obs['rgb'].copy()).float().to(device)
-    with torch.no_grad():
-        rgb_feat = model.clip_model.encode_image(rgb_img.unsqueeze(dim=0))
-    # rgb_feat = torch.rand((1,512), device=device)
+
+    image = env_obs['rgb'].copy()
+    frame = image.transpose(1,2,0)
+    rgb_feat = preprocess_image(image, model, device)
+
     obs = {
         "rgb_feat": rgb_feat,
         "compass": torch.tensor(np.append(
@@ -46,7 +93,6 @@ def preprocess_obs(env_obs, device, prev_action, prompt, model):
         "prev_action": torch.tensor(prev_action, device=device),
         "prompt": prompt,
     }
-    frame = env_obs['rgb'].transpose(1,2,0)
 
     return Batch(obs=obs), frame
 

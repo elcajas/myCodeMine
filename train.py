@@ -18,7 +18,7 @@ res_path = dir_path.joinpath(f"results/run_{time}")
 res_path.mkdir(parents=True, exist_ok=True)
 
 def main():
-    with open(dir_path.joinpath("config.yaml"), "r") as f:
+    with open(dir_path.joinpath("conf_local.yaml"), "r") as f:                      # Change config file, conf_local.yaml
         cfg = yaml.safe_load(f)
     cfg = OmegaConf.create(cfg)
 
@@ -27,17 +27,18 @@ def main():
     OmegaConf.set_struct(cfg, True)
     
     cfg_params = cfg.hyperparameters
-    init_log(cfg_params, res_path)                                                  #Initialize logging and wandb
+    init_log(cfg_params, res_path)                                                  # Initialize logging and wandb
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
     ppo_agent = PPO(cfg, device)
     if cfg_params.load_checkpoint:
-        ppo_agent.load_model(cfg_params.checkpoint_dir, cfg_params.checkpoint_epoch)
+        ppo_agent.load_model(cfg_params.checkpoint_dir, res_path, cfg_params.checkpoint_epoch)
     else:
         ppo_agent.save_model(res_path, 0)
-
-    si_model = SImodel(cfg, device)
+    
+    # si_model = SImodel(cfg, device)
+    dino_model = set_gdino(cfg, device)
     mineCLIP = set_MineCLIP(cfg_mineclip, device)
 
     task = cfg_params.task
@@ -53,8 +54,13 @@ def main():
     env = create_env(task)
     state = env.reset()
     # ppo_agent.buffer.store_episode(state, 0, False, {})
+    image_model_name = cfg.feature_net_kwargs.rgb_feat.image_model
+    if image_model_name == 'mineclip':
+        image_model = mineCLIP
+    else:
+        image_model = dino_model
 
-    state, frame = preprocess_obs(state, device, no_action, prompt, mineCLIP)
+    state, frame = preprocess_obs(state, device, no_action, prompt, image_model)        # change model mineCLIP
     num_ep = 0
     steps_per_epoch = cfg_params.PPO_buffer_size
     epochs = cfg_params.epochs
@@ -70,7 +76,7 @@ def main():
 
             next_state, reward, done, _ = env.step(env_action)       #step(env_action)
             # ppo_agent.buffer.store_episode(next_state, reward, done, _)
-            next_state, next_frame = preprocess_obs(next_state, device, action, prompt, mineCLIP)
+            next_state, next_frame = preprocess_obs(next_state, device, action, prompt, image_model)   # change model mineCLIP
             
             ppo_agent.buffer.store(state, action, reward, log_prob, state_value, frame)
             # ppo_agent.buffer.store_episode()
@@ -93,7 +99,7 @@ def main():
                     last_value = 0
                 
                 ppo_agent.buffer.add_last_frame(frame)
-                traj, trajectory = ppo_agent.buffer.calc_advantages(last_val=last_value, no_op=no_action.item())
+                traj, trajectory = ppo_agent.buffer.calc_advantages(mineCLIP, last_val=last_value, no_op=no_action.item(), ppo=ppo_agent, image_model_name=image_model_name)
                 # si_model.buffer.store(trajectory)
 
                 num_ep += 1
@@ -108,7 +114,7 @@ def main():
                 if ep_reward >= cfg_params.video_min_rew:
                     logging.info(f'making video with reward {ep_reward:.2f}')
                     ppo_agent.buffer.make_video(res_path, ep_reward, num_ep)
-                    ppo_agent.buffer.get_images(res_path, ep_reward, num_ep)
+                    # ppo_agent.buffer.get_images(res_path, ep_reward, num_ep)
                 
                 # if ep_reward >= 200:
                 #     logging.info(f'saving successful episode')
@@ -117,7 +123,7 @@ def main():
 
                 state = env.reset()
                 # ppo_agent.buffer.store_episode(state, 0, False, {})
-                state, frame = preprocess_obs(state, device, no_action, prompt, mineCLIP)
+                state, frame = preprocess_obs(state, device, no_action, prompt, image_model)
 
         # Update PPO after buffer is full
         ppo_agent.update()

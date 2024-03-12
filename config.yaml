@@ -2,6 +2,7 @@ feature_net_kwargs:
   rgb_feat:
     cls: DummyImgFeat
     output_dim: 512
+    image_model: mineclip
   compass:
     cls: CompassMLP
     input_dim: 4
@@ -49,7 +50,7 @@ mineclip:
     checksum: "b5ece9198337cfd117a3bfbd921e56da"
 
 hyperparameters:
-  task: "dummy env"
+  task: "combat spider"
   number_actions: 89
   epochs: 10
   PPO_buffer_size: 100000
@@ -70,7 +71,7 @@ hyperparameters:
   demos_path: ""
   
   file_logging: true
-  wandb_init: false
+  wandb_init: true
 
 
 # hydra: 

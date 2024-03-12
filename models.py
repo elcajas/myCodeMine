@@ -12,13 +12,13 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 import numpy as np
 
-from mineclip.mineagent import features as F
 from mineclip import SimpleFeatureFusion, MineAgent, MultiCategoricalActor
 from mineclip.mineagent.batch import Batch
 from mineclip.utils import build_mlp
 
 from Data.buffers import PPOBuffer, SIBuffer
 from Data.datasets import custom_collate_fn
+import models_mlp as F
 from utils import smoothing
 
 import matplotlib.pyplot as plt
@@ -161,7 +161,11 @@ class PPO:
         logging.info(f'Saving checkpoint in {weight_path} for epoch {epoch}')
         torch.save(self.policy.state_dict(), weight_path)
     
-    def load_model(self, dir_path, epoch):
+    def load_model(self, dir_path: pathlib.Path, res_path:pathlib.Path, epoch):
+        weights_dir_path = res_path.joinpath("weights")
+        if not weights_dir_path.exists():
+            weights_dir_path.mkdir()
+            
         logging.info(f'Loading checkpoint from {dir_path} in epoch {epoch}')
         checkpoint_path = pathlib.Path(dir_path) / f"model_epoch_{epoch}.pth"
 

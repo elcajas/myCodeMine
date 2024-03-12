@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
 import pickle
@@ -56,18 +57,74 @@ class PPOBuffer:
     def store_episode(self, obs, reward, done, info):
         self.last_episode.append((obs, reward, done, info))
 
-    def calc_advantages(self, last_val=0, no_op=0):
-        path_slice = slice(self.path_start_idx, self.pointer)
-        values = np.append(self.state_values[path_slice], last_val)
+    def rewardMineclip(self, states, model, scale, ppo, model_type='mineclip'):
+
+        prompts = [
+            "combat spider",
+            "Milk a cow with empty bucket",
+            "Combat zombie with sword",
+            "Hunt a cow",
+            "Hunt a sheep"
+        ]
+
+        #Obtaining rgb_feats. Output from MineCLIP
+        rgb_feats = [st.obs.rgb_feat for st in states]
+        
+        #Grouping into sets of 16
+        if model_type == 'mineclip':
+            videos = []
+            for i in range(len(rgb_feats) - 15):
+                video = torch.cat((rgb_feats[i:i + 16]), dim=0)
+                videos.append(video)
+            image_feats_batch = torch.stack((videos), dim=0)
+
+        if model_type == 'gdino':
+            rgb_feats = torch.cat(rgb_feats, dim=0)
+            with torch.no_grad():
+                rgb_feats, _ = ppo.policy.actor.actor.preprocess._extractors.rgb_feat(rgb_feats)
+
+            videos = []
+            for i in range(len(rgb_feats) - 15):
+                videos.append(rgb_feats[i:i + 16])
+            image_feats_batch = torch.stack((videos), dim=0)
+
+        with torch.no_grad():
+            video_batch = model.forward_video_features(image_feats_batch)
+            prompt_batch = model.encode_text(prompts)
+            _, rew = model.forward_reward_head(video_batch, prompt_batch)
+            rew = F.softmax(rew, dim=0)
+        
+        rew_clamp = torch.clamp(rew[0] - 1/len(prompts), min=0).cpu()
+        rewards = torch.cat([torch.full((15,),rew_clamp[0]), rew_clamp]) * scale
+
+        return rewards
+    
+    def rewardSimulator(self, path_slice):
+
         rewards = self.rewards[path_slice]
-        actions = self.actions[path_slice]
         rewards[:-2] = rewards[2:]
         rewards[-2:] = [0, 0]
+
+        return rewards
+
+    def calc_advantages(self, model, last_val=0, no_op=0, ppo=None, image_model_name='mineclip'):
+
+        path_slice = slice(self.path_start_idx, self.pointer)
+        states = self.states[path_slice]
+        values = np.append(self.state_values[path_slice], last_val)
+        actions = self.actions[path_slice]
+
+        reward_func = 'mineclip'
+        if reward_func == 'simulator':
+           rewards = self.rewardSimulator(path_slice)
+        else:
+            rewards = self.rewardMineclip(states, model, scale=0.1, ppo=ppo, model_type=image_model_name)
+        print(rewards)
         assert len(actions) >=3, f'length of actions: {len(actions)}'
         # actions[2:] = actions[:-2]
         # actions[:2] = [no_op, no_op]
 
-        trajectory = Batch.cat(self.states[path_slice])
+        trajectory = Batch.cat(states)
         trajectory['actions'] = torch.tensor(actions)
         trajectory['rewards'] = torch.tensor(rewards)
 
