@@ -5,4 +5,4 @@ logs/
 results/
 wandb/
 observation_dict.pkl
-conf_local.yaml
+config_local.yaml

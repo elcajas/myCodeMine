@@ -2,7 +2,7 @@ feature_net_kwargs:
   rgb_feat:
     cls: DummyImgFeat
     output_dim: 512
-    image_model: mineclip
+    image_model: mineclip  # Image models: mineclip, gdino
   compass:
     cls: CompassMLP
     input_dim: 4
@@ -46,22 +46,25 @@ mineclip:
   pool_type: "attn.d2.nh8.glusw"  # filled by variant
   resolution: [160, 256]
   ckpt:
-    path:  /home/user/weights/attn.pth # filled by users
+    path:  # filled by users
     checksum: "b5ece9198337cfd117a3bfbd921e56da"
 
-hyperparameters:
-  task: "combat spider"
+ppo_buffer:
+  buffer_size: 15000
   number_actions: 89
-  epochs: 10
-  PPO_buffer_size: 100000
-  batch_size: 10000
 
-  SI_buffer_size: 50
+si_buffer:
+  buffer_size: 50
   buffer_mean: 0.1
   buffer_std: 0
   buffer_delta: 0
 
-  video_min_rew: 30
+hyperparameters:
+  task: "milk a cow"
+  epochs: 20
+  batch_size: 5000
+
+  video_min_rew: 32
 
   load_checkpoint: false
   checkpoint_dir: "/home/user/Mine/results/run_231109_0814/weights"

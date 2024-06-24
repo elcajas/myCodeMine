@@ -18,8 +18,6 @@ from inference import load_model, load_image, predict, annotate
 import cv2
 
 import os
-import sys
-# sys.path.append("../../")
 
 # calculated from 21K video clips, which contains 2.8M frames
 MC_IMAGE_MEAN = (0.3331, 0.3245, 0.3051)
@@ -30,7 +28,7 @@ TEXT_TRESHOLD = 0.25
 
 def set_gdino(cfg, device):
     model = load_model("../GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py", "../GroundingDINO/weights/groundingdino_swint_ogc.pth")
-    return model
+    return model.to(device)
 
 def set_MineCLIP(cfg, device):
     OmegaConf.set_struct(cfg, False)

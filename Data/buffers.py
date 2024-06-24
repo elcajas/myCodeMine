@@ -20,23 +20,25 @@ def discounted_cumsum(data, discount, tmp=0):
     return sum[::-1]
 
 class PPOBuffer:
-    def __init__(self, capacity, gamma, lam, n_actions) -> None:
-        self.states = [Batch(tmp=np.array([0]))] * capacity
-        self.actions = np.zeros(capacity, dtype=np.float32)
-        self.rewards = np.zeros(capacity, dtype=np.float32)
-        self.log_probs = np.zeros(capacity, dtype=np.float32)
-        self.state_values = np.zeros(capacity, dtype=np.float32)
+    def __init__(self, cfg, gamma, lam) -> None:
+        self.cfg = cfg
+        self.max_capacity = cfg.buffer_size
+        self.states = [Batch(tmp=np.array([0]))] * self.max_capacity
+        self.actions = np.zeros(self.max_capacity, dtype=np.float32)
+        self.rewards = np.zeros(self.max_capacity, dtype=np.float32)
+        self.log_probs = np.zeros(self.max_capacity, dtype=np.float32)
+        self.state_values = np.zeros(self.max_capacity, dtype=np.float32)
         
         self.frames = []
         self.last_trajectory = Batch(tmp=np.array([0]))
         self.last_episode = []
 
-        self.advantages = np.zeros(capacity, dtype=np.float32)
-        self.returns = np.zeros(capacity, dtype=np.float32)
+        self.advantages = np.zeros(self.max_capacity, dtype=np.float32)
+        self.returns = np.zeros(self.max_capacity, dtype=np.float32)
 
         self.gamma, self.lam = gamma, lam
-        self.number_actions = n_actions
-        self.pointer, self.path_start_idx, self.max_capacity = 0, 0, capacity 
+        self.number_actions = cfg.number_actions
+        self.pointer, self.path_start_idx, self.max_capacity = 0, 0, self.max_capacity 
     
     def store(self, state, action, reward, log_prob, state_value, frame):
 
@@ -57,7 +59,7 @@ class PPOBuffer:
     def store_episode(self, obs, reward, done, info):
         self.last_episode.append((obs, reward, done, info))
 
-    def rewardMineclip(self, states, model, scale, ppo, model_type='mineclip'):
+    def rewardMineclip(self, states, model, path_slice, scale, ppo, model_type='mineclip'):
 
         prompts = [
             "combat spider",
@@ -96,6 +98,8 @@ class PPOBuffer:
         
         rew_clamp = torch.clamp(rew[0] - 1/len(prompts), min=0).cpu()
         rewards = torch.cat([torch.full((15,),rew_clamp[0]), rew_clamp]) * scale
+        rewards = rewards.cpu().numpy()
+        rewards = rewards + (self.rewardSimulator(path_slice) >= 200)
 
         return rewards
     
@@ -114,12 +118,12 @@ class PPOBuffer:
         values = np.append(self.state_values[path_slice], last_val)
         actions = self.actions[path_slice]
 
-        reward_func = 'mineclip'
+        reward_func = 'simulator'
         if reward_func == 'simulator':
            rewards = self.rewardSimulator(path_slice)
         else:
-            rewards = self.rewardMineclip(states, model, scale=0.1, ppo=ppo, model_type=image_model_name)
-        print(rewards)
+            rewards = self.rewardMineclip(states, model, path_slice, scale=0.1, ppo=ppo, model_type=image_model_name)
+            
         assert len(actions) >=3, f'length of actions: {len(actions)}'
         # actions[2:] = actions[:-2]
         # actions[:2] = [no_op, no_op]

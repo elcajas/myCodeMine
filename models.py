@@ -72,7 +72,7 @@ class Actor(nn.Module):
 
         self.actor = MultiCategoricalActor(
             feature_net,
-            action_dim=[cfg.hyperparameters.number_actions],
+            action_dim=[cfg.ppo_buffer.number_actions],
             device=self.device,
             **cfg.actor,
         )
@@ -130,14 +130,15 @@ class PPO:
         self.optim_iter = 15
         self.lr_actor = 1e-4
         self.lr_critic = 1e-4
+
         self.cfg = cfg
+        self.ppo_buffer_conf = cfg.ppo_buffer
+
         self.device = device
         self.counter = 0
-        self.memory_capacity = cfg.hyperparameters.PPO_buffer_size
         self.batch_size = cfg.hyperparameters.batch_size
-        self.n_actions = cfg.hyperparameters.number_actions
 
-        self.buffer = PPOBuffer(self.memory_capacity, self.gamma, self.lam, self.n_actions)
+        self.buffer = PPOBuffer(cfg=self.ppo_buffer_conf, gamma=self.gamma, lam=self.lam)
         self.policy = ActorCritic(cfg, device).to(device=self.device)
         self.optimizer = Adam([
             {'params': self.policy.actor.parameters(), 'lr': self.lr_actor},
@@ -221,10 +222,10 @@ class SImodel:
         self.cfg = cfg
         self.device = device
         self.counter = 0
-        self.buffer_capacity = cfg.hyperparameters.SI_buffer_size
-        self.mean = cfg.hyperparameters.buffer_mean
-        self.std = cfg.hyperparameters.buffer_std
-        self.delt = cfg.hyperparameters.buffer_delta
+        self.buffer_capacity = cfg.si_buffer.buffer_size
+        self.mean = cfg.si_buffer.buffer_mean
+        self.std = cfg.si_buffer.buffer_std
+        self.delt = cfg.si_buffer.buffer_delta
         
         if cfg.hyperparameters.imitation_learning:
             with open(cfg.hyperparameters.demos_path,'rb') as f:

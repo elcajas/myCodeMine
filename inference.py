@@ -63,39 +63,38 @@ def predict(
 ) -> Tuple[torch.Tensor, torch.Tensor, List[str]]:
     caption = preprocess_caption(caption=caption)
 
-    model = model.to(device)
     image = image.to(device)
 
     with torch.no_grad():
         outputs = model(image[None], captions=[caption])
 
-    prediction_logits = outputs["pred_logits"].cpu().sigmoid()[0]  # prediction_logits.shape = (nq, 256)
-    prediction_boxes = outputs["pred_boxes"].cpu()[0]  # prediction_boxes.shape = (nq, 4)
-    interm_features = outputs["interm_feat"]
+    # prediction_logits = outputs["pred_logits"].cpu().sigmoid()[0]  # prediction_logits.shape = (nq, 256)
+    # prediction_boxes = outputs["pred_boxes"].cpu()[0]  # prediction_boxes.shape = (nq, 4)
+    interm_features = outputs["interm_feat"].cpu()
 
-    mask = prediction_logits.max(dim=1)[0] > box_threshold
-    logits = prediction_logits[mask]  # logits.shape = (n, 256)
-    boxes = prediction_boxes[mask]  # boxes.shape = (n, 4)
+    # mask = prediction_logits.max(dim=1)[0] > box_threshold
+    # logits = prediction_logits[mask]  # logits.shape = (n, 256)
+    # boxes = prediction_boxes[mask]  # boxes.shape = (n, 4)
 
-    tokenizer = model.tokenizer
-    tokenized = tokenizer(caption)
+    # tokenizer = model.tokenizer
+    # tokenized = tokenizer(caption)
     
-    if remove_combined:
-        sep_idx = [i for i in range(len(tokenized['input_ids'])) if tokenized['input_ids'][i] in [101, 102, 1012]]
+    # if remove_combined:
+    #     sep_idx = [i for i in range(len(tokenized['input_ids'])) if tokenized['input_ids'][i] in [101, 102, 1012]]
         
-        phrases = []
-        for logit in logits:
-            max_idx = logit.argmax()
-            insert_idx = bisect.bisect_left(sep_idx, max_idx)
-            right_idx = sep_idx[insert_idx]
-            left_idx = sep_idx[insert_idx - 1]
-            phrases.append(get_phrases_from_posmap(logit > text_threshold, tokenized, tokenizer, left_idx, right_idx).replace('.', ''))
-    else:
-        phrases = [
-            get_phrases_from_posmap(logit > text_threshold, tokenized, tokenizer).replace('.', '')
-            for logit
-            in logits
-        ]
+    #     phrases = []
+    #     for logit in logits:
+    #         max_idx = logit.argmax()
+    #         insert_idx = bisect.bisect_left(sep_idx, max_idx)
+    #         right_idx = sep_idx[insert_idx]
+    #         left_idx = sep_idx[insert_idx - 1]
+    #         phrases.append(get_phrases_from_posmap(logit > text_threshold, tokenized, tokenizer, left_idx, right_idx).replace('.', ''))
+    # else:
+    #     phrases = [
+    #         get_phrases_from_posmap(logit > text_threshold, tokenized, tokenizer).replace('.', '')
+    #         for logit
+    #         in logits
+    #     ]
     return interm_features.squeeze(0).transpose(-1,-2)
     # return boxes, logits.max(dim=1)[0], phrases
 

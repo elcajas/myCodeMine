@@ -7,6 +7,7 @@ import pathlib
 import logging
 import wandb
 import datetime
+import random
 
 import torch
 from models import PPO, SImodel
@@ -18,7 +19,7 @@ res_path = dir_path.joinpath(f"results/run_{time}")
 res_path.mkdir(parents=True, exist_ok=True)
 
 def main():
-    with open(dir_path.joinpath("conf_local.yaml"), "r") as f:                      # Change config file, conf_local.yaml
+    with open(dir_path.joinpath("config_local.yaml"), "r") as f:                      # Change config file, conf_local.yaml
         cfg = yaml.safe_load(f)
     cfg = OmegaConf.create(cfg)
 
@@ -27,9 +28,14 @@ def main():
     OmegaConf.set_struct(cfg, True)
     
     cfg_params = cfg.hyperparameters
-    init_log(cfg_params, res_path)                                                  # Initialize logging and wandb
+    init_log(cfg, res_path)                                                  # Initialize logging and wandb
 
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    seed = 1
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     ppo_agent = PPO(cfg, device)
     if cfg_params.load_checkpoint:
@@ -45,7 +51,7 @@ def main():
     with torch.no_grad():
         prompt = mineCLIP.clip_model.encode_text(task)
 
-    num_actions = cfg_params.number_actions
+    num_actions = cfg.ppo_buffer.number_actions
     rango = int((num_actions-8)**0.5)
     action_array, no_action = actions_array(rango)
 
@@ -62,7 +68,7 @@ def main():
 
     state, frame = preprocess_obs(state, device, no_action, prompt, image_model)        # change model mineCLIP
     num_ep = 0
-    steps_per_epoch = cfg_params.PPO_buffer_size
+    steps_per_epoch = cfg.ppo_buffer.buffer_size
     epochs = cfg_params.epochs
     in_epoch = cfg_params.checkpoint_epoch
 
@@ -138,7 +144,7 @@ def main():
     env.close()
 
 def init_log(cfg, res_path):
-    filename = res_path.joinpath(f"output.log") if cfg.file_logging else None
+    filename = res_path.joinpath(f"output.log") if cfg.hyperparameters.file_logging else None
     logging.basicConfig(
         filename=filename,
         format="[%(asctime)s] [%(levelname)8s] --- %(message)s (%(filename)s:%(lineno)s)", datefmt="%Y-%m-%d %H:%M:%S",
@@ -146,12 +152,12 @@ def init_log(cfg, res_path):
         filemode= 'w'
     )
     
-    if not cfg.wandb_init: os.environ["WANDB_MODE"] = "disabled"
+    if not cfg.hyperparameters.wandb_init: os.environ["WANDB_MODE"] = "disabled"
     wandb.init(
         # set the wandb project where this run will be logged
-        project=f"MineDojo-PPO-SI_{cfg.task.replace(' ','')}",
+        project=f"MineDojo-PPO-SI_{cfg.hyperparameters.task.replace(' ','')}",
         # group=f"action{cfg.number_actions}",
-        name=f"actions_{cfg.number_actions}_mean{cfg.buffer_mean}_std{cfg.buffer_std}_delta{cfg.buffer_delta}_batch{cfg.batch_size}_IL{cfg.imitation_learning}",
+        name=f"actions_{cfg.ppo_buffer.number_actions}_mean{cfg.si_buffer.buffer_mean}_std{cfg.si_buffer.buffer_std}_delta{cfg.si_buffer.buffer_delta}_batch{cfg.hyperparameters.batch_size}_IL{cfg.hyperparameters.imitation_learning}",
         
         # track hyperparameters and run metadata
         config= dict(cfg)
