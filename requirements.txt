@@ -1,9 +1,5 @@
-setuptools==66.0.0
-wheel==0.38.4
-importlib-resources==5.12.0
 git+https://github.com/MineDojo/MineCLIP
 wandb
 imageio
 imageio-ffmpeg
 matplotlib
-torchvision

@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
 import pickle
@@ -11,7 +10,7 @@ from collections import namedtuple, Counter, deque
 
 from mineclip.mineagent.batch import Batch
 from .datasets import PPODataset
-
+import pdb
 def discounted_cumsum(data, discount, tmp=0):
     sum = []
     for d in reversed(data):
@@ -20,22 +19,22 @@ def discounted_cumsum(data, discount, tmp=0):
     return sum[::-1]
 
 class PPOBuffer:
-    def __init__(self, capacity, gamma, lam, n_actions) -> None:
+    def __init__(self, capacity, gamma, lam) -> None:
         self.states = [Batch(tmp=np.array([0]))] * capacity
         self.actions = np.zeros(capacity, dtype=np.float32)
         self.rewards = np.zeros(capacity, dtype=np.float32)
         self.log_probs = np.zeros(capacity, dtype=np.float32)
         self.state_values = np.zeros(capacity, dtype=np.float32)
-        
+        # self.is_terminals = np.zeros(capacity, dtype=np.float32)
+        # self.next_states = [Batch(tmp=np.array([0]))] * capacity
         self.frames = []
         self.last_trajectory = Batch(tmp=np.array([0]))
-        self.last_episode = []
 
         self.advantages = np.zeros(capacity, dtype=np.float32)
         self.returns = np.zeros(capacity, dtype=np.float32)
 
         self.gamma, self.lam = gamma, lam
-        self.number_actions = n_actions
+        self.number_actions = 89
         self.pointer, self.path_start_idx, self.max_capacity = 0, 0, capacity 
     
     def store(self, state, action, reward, log_prob, state_value, frame):
@@ -47,90 +46,21 @@ class PPOBuffer:
         self.rewards[self.pointer] = reward
         self.log_probs[self.pointer] = log_prob
         self.state_values[self.pointer] = state_value
-
+        # self.is_terminals[self.pointer] = is_terminal
+        # self.next_states[self.pointer] = next_state
         self.frames.append(frame)
         self.pointer += 1
-    
-    def add_last_frame(self, last_frame):
-        self.frames.append(last_frame)
 
-    def store_episode(self, obs, reward, done, info):
-        self.last_episode.append((obs, reward, done, info))
-
-    def rewardMineclip(self, states, model, scale, ppo, model_type='mineclip'):
-
-        prompts = [
-            "combat spider",
-            "Milk a cow with empty bucket",
-            "Combat zombie with sword",
-            "Hunt a cow",
-            "Hunt a sheep"
-        ]
-
-        #Obtaining rgb_feats. Output from MineCLIP
-        rgb_feats = [st.obs.rgb_feat for st in states]
-        
-        #Grouping into sets of 16
-        if model_type == 'mineclip':
-            videos = []
-            for i in range(len(rgb_feats) - 15):
-                video = torch.cat((rgb_feats[i:i + 16]), dim=0)
-                videos.append(video)
-            image_feats_batch = torch.stack((videos), dim=0)
-
-        if model_type == 'gdino':
-            rgb_feats = torch.cat(rgb_feats, dim=0)
-            with torch.no_grad():
-                rgb_feats, _ = ppo.policy.actor.actor.preprocess._extractors.rgb_feat(rgb_feats)
-
-            videos = []
-            for i in range(len(rgb_feats) - 15):
-                videos.append(rgb_feats[i:i + 16])
-            image_feats_batch = torch.stack((videos), dim=0)
-
-        with torch.no_grad():
-            video_batch = model.forward_video_features(image_feats_batch)
-            prompt_batch = model.encode_text(prompts)
-            _, rew = model.forward_reward_head(video_batch, prompt_batch)
-            rew = F.softmax(rew, dim=0)
-        
-        rew_clamp = torch.clamp(rew[0] - 1/len(prompts), min=0).cpu()
-        rewards = torch.cat([torch.full((15,),rew_clamp[0]), rew_clamp]) * scale
-
-        return rewards
-    
-    def rewardSimulator(self, path_slice):
-
-        rewards = self.rewards[path_slice]
-        rewards[:-2] = rewards[2:]
-        rewards[-2:] = [0, 0]
-
-        return rewards
-
-    def calc_advantages(self, model, last_val=0, no_op=0, ppo=None, image_model_name='mineclip'):
-
+    def calc_advantages(self, last_val=0):
         path_slice = slice(self.path_start_idx, self.pointer)
-        states = self.states[path_slice]
+        rewards = self.rewards[path_slice]
         values = np.append(self.state_values[path_slice], last_val)
-        actions = self.actions[path_slice]
-
-        reward_func = 'mineclip'
-        if reward_func == 'simulator':
-           rewards = self.rewardSimulator(path_slice)
-        else:
-            rewards = self.rewardMineclip(states, model, scale=0.1, ppo=ppo, model_type=image_model_name)
-        print(rewards)
-        assert len(actions) >=3, f'length of actions: {len(actions)}'
-        # actions[2:] = actions[:-2]
-        # actions[:2] = [no_op, no_op]
-
-        trajectory = Batch.cat(states)
-        trajectory['actions'] = torch.tensor(actions)
-        trajectory['rewards'] = torch.tensor(rewards)
-
-        traj = {'states': self.last_episode.copy()}
-        traj['actions'] = torch.tensor(actions)
-        traj['rewards'] = torch.tensor(rewards)
+        trajectory = Batch.cat(self.states[path_slice])
+        traj = Batch.cat(self.states[path_slice])
+        trajectory['actions'] = torch.tensor(self.actions[path_slice])
+        trajectory['rewards'] = torch.tensor(self.rewards[path_slice])
+        traj['actions'] = torch.tensor(self.actions[path_slice])
+        traj['rewards'] = torch.tensor(self.rewards[path_slice])
 
 
         if trajectory.rewards.sum() >= 200:
@@ -155,9 +85,7 @@ class PPOBuffer:
         self.path_start_idx = self.pointer
         self.last_trajectory = trajectory
         self.frames = []
-        self.last_episode = []
-
-        return traj, trajectory
+        return traj
 
     def get(self, device):
         
@@ -180,6 +108,9 @@ class PPOBuffer:
         return PPODataset(data_dict, device)
     
     def make_video(self, path: pathlib.Path, reward, episode_number):
+        # logging.info(f"actions: {self.last_trajectory.actions}")
+        # logging.info(f"rewards: {self.last_trajectory.rewards}")
+        # logging.info(f"returns: {self.last_trajectory.returns}")
 
         video_dir = path.joinpath("videos")
         if not video_dir.exists():
@@ -188,10 +119,10 @@ class PPOBuffer:
         frames = self.last_trajectory.frames
         video_path = video_dir.joinpath(f"video_{episode_number}_{reward:.2f}.mp4")
         writer = imageio.get_writer(video_path, fps=10)
-        
-        for frame in frames:
-            writer.append_data(frame)
-        writer.close()
+        if reward > 10:
+            for frame in frames:
+                writer.append_data(frame)
+            writer.close()
 
         stat_dir = path.joinpath("stats")
         if not stat_dir.exists():
@@ -200,49 +131,11 @@ class PPOBuffer:
         stat_path = stat_dir.joinpath(f"stats_{episode_number}_{reward:.2f}.png")
         self.plot_statistics(stat_path)
     
-    def get_images(self, path: pathlib.Path, reward, episode_number):
-        images_dir = path.joinpath("images")
-        if not images_dir.exists():
-            images_dir.mkdir()
-
-        frames = self.last_trajectory.frames
-        actions = self.last_trajectory.actions
-        rewards = self.last_trajectory.rewards
-
-        indices = (rewards > 0).nonzero(as_tuple=True)[0]
-        l_ind = len(indices)
-        number_images = 7
-        r = number_images // 2
-
-        fig, ax = plt.subplots(l_ind, number_images, figsize=(number_images*10, l_ind*7))
-        fig.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.1, wspace=0.02, hspace=0.07)
-        for i, ind in enumerate(indices):
-            for c in range(number_images):
-                n = ind+c-r
-                subplot_index = c if l_ind == 1 else (i, c)
-                if n > len(rewards): continue
-                if n == len(rewards):
-                    ax[subplot_index].imshow(frames[n])
-                else:
-                    ax[subplot_index].imshow(frames[n])
-                    ax[subplot_index].set_title(f'frame: {n}, reward: {rewards[n]}, action: {actions[n]}', fontsize=25)
-
-            # Turn off the axes for the current subplot
-            if l_ind == 1:
-                for a in ax:
-                    a.axis('off')
-            else:
-                for a in ax[i]:
-                    a.axis('off')
-
-        img_path = images_dir.joinpath(f'episode_{episode_number}_{reward:.2f}.png')
-        fig.savefig(img_path, bbox_inches='tight')
-        plt.close(fig)
-
     def plot_statistics(self, path:pathlib.Path):
         
         c = Counter(self.last_trajectory.actions.numpy())
         d = np.array(list(c.items()))
+        np.save(path.with_suffix(''), d)
 
         fig, ax = plt.subplots(figsize=(10,4))
         ax.stem(d[:,0], d[:,1], markerfmt="", basefmt="-b")  # Plot only positive frequencies
@@ -257,23 +150,6 @@ class PPOBuffer:
         fig.savefig(path)
         plt.close(fig)
     
-    def plot_probs(self, probs, path:pathlib.Path):
-
-        probs = probs.detach().cpu()
-
-        fig, ax = plt.subplots(figsize=(10,4))
-        ax.stem(probs*100, markerfmt="", basefmt="-b")  # Plot only positive frequencies
-        ax.set_xlabel('action number')
-        ax.set_ylabel('probability')
-        ax.set_xlim(-1, self.number_actions+1)
-        ax.set_xticks(np.arange(0, self.number_actions, 5))
-
-        ax.grid(which='major', color='#DDDDDD', linewidth=0.8)
-        ax.grid(which='minor', color='#EEEEEE', linestyle=':', linewidth=0.6)
-        ax.minorticks_on()
-        fig.savefig(path)
-        plt.close(fig)
-
     def save_data(self, path: pathlib.Path):
         path = path.joinpath('episode_data.pkl')
         with open(path, 'wb') as f:
@@ -281,18 +157,17 @@ class PPOBuffer:
 
 
 class SIBuffer:
-    def __init__(self, capacity, mean, std, delt) -> None:
+    def __init__(self, capacity) -> None:
         self.trajectories = [Batch(tmp=np.array([0]))] * capacity
         self.total_rewards = np.zeros(capacity, dtype=np.float32)
         self.probs = np.zeros(capacity, dtype=np.float32)
 
-        self.delt = delt
-        self.mean, self.std = mean, std
+        self.mean, self.std = 20, 0
         self.traj_number, self.step_pos, self.max_capacity = 0, 0, capacity
 
     def store(self, trajectory):
         total_rew = trajectory.rewards.sum().item()
-        threshold = self.mean + self.delt * self.std
+        threshold = self.mean + 0 * self.std
 
         if self.traj_number < self.max_capacity:
             if trajectory.successful == 1 or (total_rew > 0 and total_rew >= threshold):
@@ -312,7 +187,53 @@ class SIBuffer:
         # Update mean and std
         self.mean = self.total_rewards[:self.traj_number].mean()
         self.std = np.std(self.total_rewards[:self.traj_number])
-        thr = self.mean + self.delt * self.std
-        logging.info(f" --- mean: {self.mean:.2f}, std: {self.std:.2f}, threshold: {(thr):.2f}, num_traj: {self.traj_number} ---")
+        thr = self.mean + 2 * self.std
+        logging.info(f"mean: {self.mean:.2f}, std: {self.std:.2f}, threshold: {(thr):.2f}, num_traj: {self.traj_number}")
 
         return self.trajectories[:self.traj_number]
+
+
+# Transition = namedtuple('Transition', 
+#                         ('states', 'actions', 'rewards', 'log_probs', 'state_values', 'is_terminals', 'next_states'))
+# Complete_transition = namedtuple('Complete_transition', 
+#                         ('states', 'actions', 'rewards', 'log_probs', 'state_values', 'is_terminals', 'next_states', 'returns', 'advantages'))
+
+# class MemoryReplay:
+#     def __init__(self, capacity, gamma, lam) -> None:
+#         self.memory = deque([], maxlen=capacity)
+#         self.returns = deque([], maxlen=capacity)
+#         self.advantages = deque([],maxlen=capacity)
+
+#         self.gamma, self.lam = gamma, lam
+#         self.pointer, self.path_start_idx = 0, 0
+#         self.capacity = capacity
+
+#     def add(self, *args):
+#         self.memory.append(Transition(*args))
+#         self.pointer += 1
+    
+#     def calc_advantages(self, last_val=0):
+#         path_slice = slice(self.path_start_idx, self.pointer)
+#         batch = Transition(*zip(*self.memory))
+#         rewards = np.array((*batch.rewards[path_slice], last_val))
+#         values = np.array((*batch.state_values[path_slice], last_val))
+
+#     def __len__(self):
+#         return len(self.memory)
+
+# class RolloutBuffer:
+#     def __init__(self) -> None:
+#         self.actions = []
+#         self.states = []
+#         self.logprobs = []
+#         self.rewards = []
+#         self.state_values = []
+#         self.is_terminals = []
+    
+#     def clear(self):
+#         del self.actions[:]
+#         del self.states[:]
+#         del self.logprobs[:]
+#         del self.rewards[:]
+#         del self.state_values[:]
+#         del self.is_terminals[:]
